@@ -1,0 +1,764 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"os"
+	"os/signal"
+	"path"
+	"reflect"
+	"regexp"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+const EnvPrefix = "IFGICAL"
+
+var (
+	Addr              = flag.String("addr", ":8080", "Listen address")
+	LogLevel          = flag_Level("log-level", 0, "Log level (debug/info/warn/error)")
+	LogJSON           = flag.Bool("log-json", false, "Output logs as JSON")
+	CacheTime         = flag.Duration("cache-time", time.Minute*5, "Time to cache Innosoft Fusion Go data for")
+	Timeout           = flag.Duration("timeout", time.Second*5, "Timeout for fetching Innosoft Fusion Go data")
+	ProxyHeader       = flag.String("proxy-header", "", "Trusted header containing the remote address (e.g., X-Forwarded-For)")
+	InstanceWhitelist = flag.String("instance-whitelist", "", "Comma-separated whitelist of Innosoft Fusion Go instances to get data from")
+)
+
+func flag_Level(name string, value slog.Level, usage string) *slog.Level {
+	v := new(slog.Level)
+	flag.TextVar(v, name, value, usage)
+	return v
+}
+
+func main() {
+	// parse config
+	flag.CommandLine.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "usage: %s [options]\n", flag.CommandLine.Name())
+		fmt.Fprintf(flag.CommandLine.Output(), "\noptions:\n")
+		flag.CommandLine.PrintDefaults()
+		fmt.Fprintf(flag.CommandLine.Output(), "\nnote: all options can be specified as environment variables with the prefix %q and dashes replaced with underscores\n", EnvPrefix)
+	}
+	for _, e := range os.Environ() {
+		if e, ok := strings.CutPrefix(e, EnvPrefix+"_"); ok {
+			if k, v, ok := strings.Cut(e, "="); ok {
+				if err := flag.CommandLine.Set(strings.ReplaceAll(strings.ToLower(k), "_", "-"), v); err != nil {
+					fmt.Fprintf(flag.CommandLine.Output(), "env %s: %v\n", k, err)
+					flag.CommandLine.Usage()
+					os.Exit(2)
+				}
+			}
+		}
+	}
+	if flag.Parse(); flag.NArg() != 0 {
+		fmt.Fprintf(flag.CommandLine.Output(), "extra arguments %q provided\n", flag.Args())
+		flag.CommandLine.Usage()
+		os.Exit(2)
+	}
+
+	// setup slog if required
+	var logOptions *slog.HandlerOptions
+	if *LogLevel != 0 {
+		logOptions = &slog.HandlerOptions{
+			Level: *LogLevel,
+		}
+	}
+	if *LogJSON {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, logOptions)))
+	} else if logOptions != nil {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, logOptions)))
+	}
+
+	// setup http server
+	srv := &http.Server{
+		Addr:    *Addr,
+		Handler: http.HandlerFunc(handle),
+	}
+	if *ProxyHeader != "" {
+		next := srv.Handler
+		srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if x, _, _ := strings.Cut(r.Header.Get(*ProxyHeader), ","); x != "" {
+				r1 := *r
+				r = &r1
+				if xap, err := netip.ParseAddrPort(x); err == nil {
+					// valid ip/port; keep the entire thing
+					r.RemoteAddr = xap.String()
+				} else if xa, err := netip.ParseAddr(x); err == nil {
+					// only an ip; keep the existing port if possible
+					eap, _ := netip.ParseAddrPort(r.RemoteAddr)
+					r.RemoteAddr = netip.AddrPortFrom(xa, eap.Port()).String()
+				} else {
+					// invalid
+					slog.Warn("failed to parse proxy remote ip header", "header", *ProxyHeader, "value", x)
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	if l, err := net.Listen("tcp", srv.Addr); err != nil {
+		slog.Error("listen", "error", err)
+		os.Exit(1)
+	} else {
+		go srv.Serve(l)
+	}
+
+	// ready; stop on ^C
+	slog.Info("started server", "addr", srv.Addr)
+
+	ctx, done := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer done()
+	<-ctx.Done()
+
+	// stop; force-stop on ^C
+	slog.Info("stopping")
+
+	ctx, done = signal.NotifyContext(context.Background(), os.Interrupt)
+	defer done()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Warn("failed to stop server gracefully", "error", err)
+	}
+}
+
+func handle(w http.ResponseWriter, r *http.Request) {
+	p := strings.TrimLeft(path.Clean(r.URL.Path), "/")
+
+	// /{instance}.ics -> handleCalendar
+	if !strings.ContainsRune(p, '/') {
+		if instance, ok := strings.CutSuffix(p, ".ics"); ok && instance != "" {
+			handleCalendar(w, r, instance)
+			return
+		}
+	}
+
+	http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+}
+
+var (
+	// TODO: refactor
+	cacheLock          sync.Mutex
+	cacheUpdated       = map[string]time.Time{}
+	cacheSchedules     = map[string][]byte{}
+	cacheNotifications = map[string][]byte{}
+)
+
+func handleCalendar(w http.ResponseWriter, r *http.Request, instance string) {
+	w.Header().Set("Cache-Control", "private, no-cache, no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
+	if *InstanceWhitelist != "" {
+		if !slices.Contains(strings.Split(*InstanceWhitelist, ","), instance) {
+			slog.Info("calendar request to non-whitelisted instance rejected", "remote", r.RemoteAddr, "instance", instance)
+			http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
+			return
+		}
+	}
+
+	if cur, lim := len(r.URL.RawQuery), 512; cur > lim {
+		slog.Info("rejected request with long query string", "remote", r.RemoteAddr, "instance", instance)
+		http.Error(w, fmt.Sprintf("Request query too long (%d > %d)", cur, lim), http.StatusRequestURITooLong)
+		return
+	}
+
+	q := r.URL.Query()
+
+	var (
+		f_category    = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["category"]}
+		f_category_id = filterer{Negation: true, Wildcard: false, CaseFold: true, Collapse: true, Patterns: q["category_id"]}
+		f_activity    = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["activity"]}
+		f_activity_id = filterer{Negation: true, Wildcard: false, CaseFold: true, Collapse: true, Patterns: q["activity_id"]}
+		f_location    = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["location"]}
+
+		_, o_no_notifications = q["no_notifications"]
+		_, o_no_canceled      = q["no_canceled"]
+	)
+
+	var (
+		schedule      FusionSchedule
+		notifications FusionNotifications
+	)
+	if err := func() error {
+		cacheLock.Lock()
+		defer cacheLock.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), *Timeout)
+		defer cancel()
+
+		if u, ok := cacheUpdated[instance]; !ok || time.Since(u) > *CacheTime {
+			slog.Info("fusion data missing or stale; fetching", "instance", instance, "last_update", u, "cache_time", *CacheTime)
+			u = time.Now()
+
+			schedule, err := httpGet(ctx, "https://innosoftfusiongo.com/schools/"+url.PathEscape(instance)+"/schedule.json")
+			if err != nil {
+				return fmt.Errorf("get schedule: %w", err)
+			}
+
+			notifications, err := httpGet(ctx, "https://innosoftfusiongo.com/schools/"+url.PathEscape(instance)+"/notifications.json")
+			if err != nil {
+				return fmt.Errorf("get notifications: %w", err)
+			}
+
+			cacheUpdated[instance] = u
+			cacheSchedules[instance] = schedule
+			cacheNotifications[instance] = notifications
+		}
+
+		if err := json.Unmarshal(cacheSchedules[instance], &schedule); err != nil {
+			return fmt.Errorf("parse schedule: %w", err)
+		}
+		if err := json.Unmarshal(cacheNotifications[instance], &notifications); err != nil {
+			return fmt.Errorf("parse notifications: %w", err)
+		}
+		return nil
+	}(); err != nil {
+		slog.Error("failed to fetch data", "error", err, "instance", instance)
+		http.Error(w, fmt.Sprintf("Failed to fetch data: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// TODO: refactor
+
+	var ical bytes.Buffer
+	if err := func() error {
+		// get the schedule timezone
+		tz, err := time.LoadLocation("America/Toronto")
+		if err != nil {
+			return err
+		}
+
+		// do some cleanup
+		for ci, c := range schedule.Categories {
+			for di, d := range c.Days {
+				for ai, a := range d.ScheduledActivities {
+					a.Description = strings.TrimSpace(a.Description)
+					schedule.Categories[ci].Days[di].ScheduledActivities[ai] = a
+				}
+			}
+		}
+
+		// check some basic assumptions
+		activityInstancesCheck := map[string]FusionScheduleActivity{}
+		for _, c := range schedule.Categories {
+			for _, d := range c.Days {
+				for _, a := range d.ScheduledActivities {
+					iid := fmt.Sprint(a.ActivityID, d.Date, a.StartTime, a.EndTime)
+					if x, ok := activityInstancesCheck[iid]; !ok {
+						activityInstancesCheck[iid] = a
+					} else if !reflect.DeepEqual(a, x) {
+						panic("wtf: activity instance is not uniquely identified by (id, date, start, end)")
+					}
+				}
+			}
+		}
+
+		type ActivityKey struct {
+			ActivityID string
+			Location   string
+			StartTime  FusionTime
+			EndTime    FusionTime
+		}
+
+		type ActivityInstance struct {
+			Name        string
+			Description string
+			Date        FusionDate
+		}
+		type ActivityCategory struct {
+			Name string
+			ID   int
+		}
+
+		// collect activity instance event info and group into recurrence groups
+		activities := map[ActivityKey][]ActivityInstance{}
+		activityCategories := map[ActivityKey][]ActivityCategory{}
+		for _, c := range schedule.Categories {
+			for _, d := range c.Days {
+				for _, a := range d.ScheduledActivities {
+					if a.IsCanceled == 0 {
+						activityKey := ActivityKey{
+							ActivityID: a.ActivityID,
+							StartTime:  a.StartTime,
+							Location:   a.Location,
+							EndTime:    a.EndTime,
+						}
+						activityInstance := ActivityInstance{
+							Name:        a.Activity,
+							Description: a.Description,
+							Date:        d.Date,
+						}
+						activityCategory := ActivityCategory{
+							Name: c.Category,
+							ID:   c.ID,
+						}
+						// activity instances can be duplicated across categories
+						if !slices.Contains(activities[activityKey], activityInstance) {
+							activities[activityKey] = append(activities[activityKey], activityInstance)
+						}
+						if !slices.Contains(activityCategories[activityKey], activityCategory) {
+							activityCategories[activityKey] = append(activityCategories[activityKey], activityCategory)
+						}
+					}
+				}
+			}
+		}
+
+		// deterministically sort the map
+		activityKeys := make([]ActivityKey, 0, len(activities))
+		for activityKey, activityInstances := range activities {
+			sort.SliceStable(activityInstances, func(i, j int) bool {
+				return activityInstances[i].Date.Less(activityInstances[j].Date)
+			})
+			activityKeys = append(activityKeys, activityKey)
+		}
+		sort.SliceStable(activityKeys, func(i, j int) bool {
+			if activityKeys[i].ActivityID == activityKeys[j].ActivityID {
+				return activityKeys[i].StartTime.Less(activityKeys[j].StartTime)
+			}
+			return activityKeys[i].ActivityID < activityKeys[j].ActivityID
+		})
+
+		type ActivityBase struct {
+			Instance ActivityInstance
+
+			Recurrence map[time.Weekday]int
+			Last       FusionDate
+		}
+
+		// heuristically determine the recurrence info
+		activityBase := make(map[ActivityKey]ActivityBase, len(activities))
+		for _, activityKey := range activityKeys {
+			activityInstances := activities[activityKey]
+
+			// if there's only one instance, no recurrence
+			if len(activityInstances) == 1 {
+				activityBase[activityKey] = ActivityBase{
+					Instance: activityInstances[0],
+				}
+				continue
+			}
+
+			base := ActivityBase{
+				Recurrence: map[time.Weekday]int{},
+			}
+
+			// find the first and last occurrences (note: we sorted it earlier)
+			base.Instance.Date = activityInstances[0].Date
+			base.Last = activityInstances[len(activityInstances)-1].Date
+
+			// figure out the recurrence pattern
+			for _, activityInstance := range activityInstances {
+				base.Recurrence[time.Weekday(activityInstance.Date.Time(tz).Weekday())]++
+			}
+
+			// find the first most common name
+			{
+				names := []string{}
+				nameCounts := map[string]int{}
+				nameCount := 0
+				for _, activityInstance := range activityInstances {
+					if _, seen := nameCounts[activityInstance.Name]; !seen {
+						names = append(names, activityInstance.Name)
+					}
+					nameCounts[activityInstance.Name]++
+				}
+				for _, name := range names {
+					if n := nameCounts[name]; n > nameCount {
+						nameCount = n
+						base.Instance.Name = name
+					}
+				}
+			}
+
+			// keep the description if all are the same
+			base.Instance.Name = activityInstances[0].Name
+			base.Instance.Description = activityInstances[0].Description
+
+			activityBase[activityKey] = base
+		}
+
+		// get calendar boundaries
+		var calStart, calEnd time.Time
+		for _, c := range schedule.Categories {
+			for _, d := range c.Days {
+				t := d.Date.Time(tz)
+				if calStart.IsZero() || t.Before(calStart) {
+					calStart = t
+				}
+				if calEnd.IsZero() || t.After(calEnd) {
+					calStart = t
+				}
+			}
+		}
+		if calStart.IsZero() {
+			calStart = time.Now().In(tz)
+		}
+		if calEnd.IsZero() {
+			calEnd = time.Now().In(tz)
+		}
+
+		// compute excluded activity keys
+		activityKeyExcludes := map[ActivityKey]bool{}
+		for _, activityKey := range activityKeys {
+			if !f_location.Match(activityKey.Location) {
+				// location doesn't match
+				activityKeyExcludes[activityKey] = true
+				continue
+			}
+			if !slices.ContainsFunc(activityCategories[activityKey], func(activityCategory ActivityCategory) bool {
+				return f_category.Match(activityCategory.Name) && f_category_id.Match(strconv.Itoa(activityCategory.ID))
+			}) {
+				// no matching categories
+				activityKeyExcludes[activityKey] = true
+				continue
+			}
+			if !slices.ContainsFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
+				return f_activity.Match(activityInstance.Name) && f_activity_id.Match(activityKey.ActivityID)
+			}) {
+				// no matching instances
+				activityKeyExcludes[activityKey] = true
+				continue
+			}
+		}
+
+		// generate calendar
+		// TODO: refactor, handle values better
+		icalTextEscape := strings.NewReplacer(
+			"\r\n", "\\n",
+			"\n", "\\n",
+			"\\", "\\\\",
+			";", "\\;",
+			",", "\\,",
+		)
+		fmt.Fprintf(&ical, "BEGIN:VCALENDAR\r\n")
+		fmt.Fprintf(&ical, "VERSION:2.0\r\n")
+		fmt.Fprintf(&ical, "PRODID:arcical\r\n")
+		fmt.Fprintf(&ical, "NAME:ARC Schedule\r\n")
+		fmt.Fprintf(&ical, "X-WR-CALNAME:ARC Schedule\r\n")
+		fmt.Fprintf(&ical, "REFRESH-INTERVAL;VALUE=DURATION:PT60M\r\n")
+		fmt.Fprintf(&ical, "X-PUBLISHED-TTL:PT60M\r\n")
+		fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", time.Now().UTC().Format("20060102T150405Z"))
+		fmt.Fprintf(&ical, "COLOR:%s\r\n", "firebrick") // note: closest CSS extended color keyword to red #b90e31 (=b22222 firebrick) blue #002452 (=000080 navy)
+		fmt.Fprintf(&ical, "BEGIN:VTIMEZONE\r\n")
+		fmt.Fprintf(&ical, "TZID:%s\r\n", tz)
+		for start, end := calStart.ZoneBounds(); !start.After(calEnd.AddDate(1, 0, 0)); start, end = end.ZoneBounds() {
+			var tztype string
+			if start.IsDST() {
+				tztype = "DAYLIGHT"
+			} else {
+				tztype = "STANDARD"
+			}
+			fmt.Fprintf(&ical, "BEGIN:%s\r\n", tztype)
+			fmt.Fprintf(&ical, "TZNAME:%s\r\n", start.Format("MST"))
+			fmt.Fprintf(&ical, "DTSTART:%s\r\n", start.Format("20060102T150405")) // local
+			fmt.Fprintf(&ical, "TZOFFSETFROM:%s\r\n", start.AddDate(0, 0, -1).Format("-0700"))
+			fmt.Fprintf(&ical, "TZOFFSETTO:%s\r\n", start.Format("-0700"))
+			fmt.Fprintf(&ical, "END:%s\r\n", tztype)
+			if end.IsZero() {
+				break
+			}
+		}
+		fmt.Fprintf(&ical, "END:VTIMEZONE\r\n")
+		for _, activityKey := range activityKeys {
+			if activityKeyExcludes[activityKey] {
+				continue
+			}
+
+			// https://www.nylas.com/blog/calendar-events-rrules/
+
+			// generate a uid from all fields of activityKey
+			uid := fmt.Sprintf(
+				"%s-%x-%02d%02d%02d-%02d%02d%02d@%s.innosoftfusiongo.com",
+				activityKey.ActivityID, sha1.Sum([]byte(activityKey.Location)),
+				activityKey.StartTime.Hour, activityKey.StartTime.Minute, activityKey.StartTime.Second,
+				activityKey.EndTime.Hour, activityKey.EndTime.Minute, activityKey.EndTime.Second,
+				instance,
+			)
+			if len(uid) >= 255 {
+				panic("wtf: generated uid too long")
+			}
+
+			base := activityBase[activityKey]
+
+			// write the base event
+			var byday []string
+			if base.Recurrence != nil {
+				if base.Recurrence[time.Sunday] > 0 {
+					byday = append(byday, "SU")
+				}
+				if base.Recurrence[time.Monday] > 0 {
+					byday = append(byday, "MO")
+				}
+				if base.Recurrence[time.Tuesday] > 0 {
+					byday = append(byday, "TU")
+				}
+				if base.Recurrence[time.Wednesday] > 0 {
+					byday = append(byday, "WE")
+				}
+				if base.Recurrence[time.Thursday] > 0 {
+					byday = append(byday, "TH")
+				}
+				if base.Recurrence[time.Friday] > 0 {
+					byday = append(byday, "FR")
+				}
+				if base.Recurrence[time.Saturday] > 0 {
+					byday = append(byday, "SA")
+				}
+			}
+			fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
+			fmt.Fprintf(&ical, "UID:%s\r\n", uid)
+			fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.LastUpdate.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
+			fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(base.Instance.Name))
+			fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
+			fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(base.Instance.Description))
+			fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.Time(base.Instance.Date.Time(tz)).Format("20060102T150405")) // local
+			fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityKey.EndTime.Time(base.Instance.Date.Time(tz)).Format("20060102T150405"))     // local
+			if base.Recurrence != nil {
+				fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", activityKey.EndTime.Time(base.Last.Time(tz)).Format("20060102T150405"), strings.Join(byday, ",")) // local if dtstart is local, else utc
+				for d := base.Instance.Date.Time(tz); !base.Last.Time(tz).Before(d); d = d.AddDate(0, 0, 1) {
+					if base.Recurrence[d.Weekday()] > 0 {
+						if dy, dm, dd := d.Date(); !slices.ContainsFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
+							if activityInstance.Date != (FusionDate{Year: dy, Month: dm, Day: dd}) {
+								return false
+							}
+							if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
+								return false
+							}
+							return true
+						}) {
+							fmt.Fprintf(&ical, "EXDATE;TZID=%s:%s\r\n", tz, activityKey.StartTime.Time(d).Format("20060102T150405"))
+						}
+					}
+				}
+			}
+			fmt.Fprintf(&ical, "END:VEVENT\r\n")
+
+			// write recurrence exceptions
+			if base.Recurrence != nil {
+				for _, activityInstance := range activities[activityKey] {
+					if activityInstance.Name != base.Instance.Name || activityInstance.Description != base.Instance.Description {
+						if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
+							continue
+						}
+						fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
+						fmt.Fprintf(&ical, "UID:%s\r\n", uid)
+						fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.LastUpdate.UTC().Format("20060102T150405Z"))       // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
+						fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", schedule.LastUpdate.UTC().Format("20060102T150405Z")) // utc
+						fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(activityInstance.Name))
+						fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
+						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(activityInstance.Description))
+						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.Time(activityInstance.Date.Time(tz)).Format("20060102T150405")) // local
+						fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityKey.EndTime.Time(activityInstance.Date.Time(tz)).Format("20060102T150405"))     // local
+						if base.Recurrence != nil {
+							fmt.Fprintf(&ical, "RECURRENCE-ID;TZID=%s:%s\r\n", tz, activityKey.StartTime.Time(activityInstance.Date.Time(tz)).Format("20060102T150405")) // local
+						}
+						fmt.Fprintf(&ical, "END:VEVENT\r\n")
+					}
+				}
+			}
+		}
+		if !o_no_canceled {
+			// add new placeholder events for cancellations
+			// this works around issues where some clients don't handle later excluded events properly
+			seenCancel := map[FusionScheduleActivity]struct{}{}
+			for _, c := range schedule.Categories {
+				for _, d := range c.Days {
+					for _, a := range d.ScheduledActivities {
+						if a.IsCanceled == 0 {
+							continue
+						}
+						if !f_category.Match(c.Category) || !f_category_id.Match(strconv.Itoa(c.ID)) {
+							continue
+						}
+						if !f_activity.Match(a.Activity) || !f_activity_id.Match(a.ActivityID) {
+							continue
+						}
+						if !f_location.Match(a.Location) {
+							continue
+						}
+						if _, seen := seenCancel[a]; seen {
+							continue
+						} else {
+							seenCancel[a] = struct{}{}
+						}
+						uid := fmt.Sprintf(
+							"%s-%x-%02d%02d%02d-%02d%02d%02d-cancel-%04d%02d%02d@%s.innosoftfusiongo.com",
+							a.ActivityID, sha1.Sum([]byte(a.Location)),
+							a.StartTime.Hour, a.StartTime.Minute, a.StartTime.Second,
+							a.EndTime.Hour, a.EndTime.Minute, a.EndTime.Second,
+							d.Date.Year, d.Date.Month, d.Date.Day,
+							instance,
+						)
+						if len(uid) >= 255 {
+							panic("wtf: generated uid too long")
+						}
+						fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
+						fmt.Fprintf(&ical, "UID:%s\r\n", uid)
+						fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.LastUpdate.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
+						fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace("CANCELLED - "+a.Activity))
+						fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
+						fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(a.Location))
+						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(a.Description))
+						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, a.StartTime.Time(d.Date.Time(tz)).Format("20060102T150405")) // local
+						fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, a.EndTime.Time(d.Date.Time(tz)).Format("20060102T150405"))     // local
+						fmt.Fprintf(&ical, "END:VEVENT\r\n")
+					}
+				}
+			}
+		}
+		if !o_no_notifications {
+			// add notifications as all-day events for the current day
+			for _, n := range notifications.Notifications {
+				// https://stackoverflow.com/questions/1716237/single-day-all-day-appointments-in-ics-files
+
+				notificationDate := time.Now()
+				if v, err := time.ParseInLocation("2006-01-02 15:04:05", n.Sent, tz); err == nil {
+					notificationDate = v
+				}
+
+				uid := fmt.Sprintf("notification-%d@%s.innosoftfusiongo.com", n.ID, instance)
+				if len(uid) >= 255 {
+					panic("wtf: generated uid too long")
+				}
+				fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
+				fmt.Fprintf(&ical, "UID:%s\r\n", uid)
+				fmt.Fprintf(&ical, "SEQUENCE:1\r\n")
+				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", notifications.LastUpdate.UTC().Format("20060102T150405Z")) // utc
+				fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(n.Notification))
+				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(n.Notification))
+				fmt.Fprintf(&ical, "DTSTART;VALUE=DATE;TZID=%s:%s\r\n", tz, notificationDate.In(tz).Format("20060102")) // local
+				fmt.Fprintf(&ical, "END:VEVENT\r\n")
+			}
+		}
+		fmt.Fprintf(&ical, "END:VCALENDAR\r\n")
+
+		return nil
+	}(); err != nil {
+		slog.Error("failed to generate calendar", "error", err, "instance", instance)
+		http.Error(w, fmt.Sprintf("Failed to generate calendar: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(ical.Len()))
+	w.WriteHeader(http.StatusOK)
+	ical.WriteTo(w)
+}
+
+func httpGet(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	buf, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("response status %d (%s)", resp.StatusCode, resp.Status)
+	}
+	return buf, nil
+}
+
+type filterer struct {
+	Patterns []string
+	Negation bool // support exclude patterns
+	Wildcard bool // support * wildcards
+	CaseFold bool // case-insensitive match
+	Collapse bool // replace consecutive whitespace with a single space, trim leading/trailing
+
+	compile sync.Once
+	include []*regexp.Regexp
+	exclude []*regexp.Regexp
+}
+
+func (f *filterer) Match(s string) bool {
+	f.compile.Do(func() {
+		for _, p := range f.Patterns {
+			var negate bool
+			if f.Negation {
+				p, negate = strings.CutPrefix(p, "-")
+			}
+
+			var wildStart, wildEnd bool
+			if f.Wildcard {
+				p, wildStart = strings.CutPrefix(p, "*")
+				p, wildEnd = strings.CutSuffix(p, "*")
+			}
+
+			if f.Collapse {
+				p = strings.Join(strings.Fields(p), " ")
+			}
+
+			var re strings.Builder
+			if f.CaseFold {
+				re.WriteString("(?si)")
+			} else {
+				re.WriteString("(?s)")
+			}
+			if !wildStart {
+				re.WriteByte('^')
+			}
+			for i, part := range strings.FieldsFunc(p, func(r rune) bool {
+				return r == '*'
+			}) {
+				if i != 0 {
+					re.WriteString(".+")
+				}
+				re.WriteString(regexp.QuoteMeta(part))
+			}
+			if !wildEnd {
+				re.WriteByte('$')
+			}
+			if c := regexp.MustCompile(re.String()); negate {
+				f.exclude = append(f.exclude, c)
+			} else {
+				f.include = append(f.include, c)
+			}
+		}
+	})
+
+	var match bool
+	if len(f.include) == 0 {
+		match = true
+	}
+	if !match || len(f.exclude) != 0 {
+		if f.Collapse {
+			s = strings.Join(strings.Fields(s), " ")
+		}
+		for _, c := range f.include {
+			if c.MatchString(s) {
+				match = true
+				break
+			}
+		}
+		for _, c := range f.exclude {
+			if c.MatchString(s) {
+				match = false
+				break
+			}
+		}
+	}
+	return match
+}

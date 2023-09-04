@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calendar</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        html {
+            font-size: 16px;
+        }
+        body {
+            font-size: 1rem;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+        html, body, main {
+            height: 100%;
+            padding: 0;
+            margin: 0;
+            overflow: hidden;
+        }
+        main {
+            display: flex;
+            flex-direction: column;
+            padding: 1rem;
+            gap: 1rem;
+        }
+        main #query {
+            flex: 0 0 auto;
+            min-width: 0;
+            padding: .5rem;
+            font-size: inherit;
+            border: 1px solid #000;
+            background: transparent;
+            color: inherit;
+        }
+        main #errbar {
+            flex: 0 0 auto;
+            padding: .5rem;
+            border: 1px solid rgba(128, 0, 0, 0.5);
+            background: rgba(128, 0, 0, 0.2);
+        }
+        main #calendar {
+            flex: 1;
+            font-size: 0.75em;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <input id="query" type="text" autocomplete="off" spellcheck="false" placeholder="e.g., activity=*rec*&activity=*lane swim*&activity=-basketball     (other properties: category, category_id, activity, activity_id, location)">
+        <div id="calendar"></div>
+        <div id="errbar" hidden></div>
+    </main>
+    <script src="https://unpkg.com/ical.js@1.5.0/build/ical.min.js"></script>
+    <script src="https://unpkg.com/@fullcalendar/core@6.1.8/index.global.min.js"></script>
+    <script src="https://unpkg.com/@fullcalendar/list@6.1.8/index.global.min.js"></script>
+    <script src="https://unpkg.com/@fullcalendar/daygrid@6.1.8/index.global.min.js"></script>
+    <script src="https://unpkg.com/@fullcalendar/timegrid@6.1.8/index.global.min.js"></script>
+    <script src="https://unpkg.com/@fullcalendar/icalendar@6.1.8/index.global.min.js"></script>
+    <script>
+        const url = new URL(window.location.href)
+        url.hash = ""
+        url.pathname = url.pathname.replace(/\.html$/, ".ics")
+
+        const errbar = document.getElementById("errbar")
+
+        const calendar = new FullCalendar.Calendar(document.getElementById("calendar"), {
+            initialView: "listWeek",
+            height: "100%",
+            headerToolbar: {
+                left: "prev,next",
+                center: "title",
+                right: "listWeek,timeGridWeek",
+            },
+            eventContent(arg, createElement) {
+                const domNodes = []
+
+                if (arg.event.title) {
+                    const el = document.createElement("b")
+                    el.textContent = arg.event.title
+                    domNodes.push(el)
+                }
+                if (arg.event.extendedProps.location) {
+                    if (arg.view.type == "timeGridWeek") {
+                        domNodes.push(document.createElement("br"))
+                    } else {
+                        const el = document.createElement("span")
+                        el.textContent = " \u00b7 "
+                        domNodes.push(el)
+                    }
+                    const el = document.createElement("span")
+                    el.textContent = arg.event.extendedProps.location
+                    domNodes.push(el)
+                }
+                if (arg.event.extendedProps.description) {
+                    if (arg.view.type == "timeGridWeek") {
+                        domNodes.push(document.createElement("br"))
+                    } else {
+                        const el = document.createElement("span")
+                        el.textContent = " \u00b7 "
+                        domNodes.push(el)
+                    }
+                    const el = document.createElement("i")
+                    el.textContent = arg.event.extendedProps.description
+                    domNodes.push(el)
+                }
+
+                return { domNodes }
+            },
+            eventSourceSuccess() {
+                errbar.hidden = true
+            },
+            eventSourceFailure(error) {
+                errbar.textContent = `${error}`
+                errbar.hidden = false
+            },
+        })
+        calendar.render()
+
+        const reload = () => {
+            calendar.getEventSources().forEach(x => x.remove())
+            calendar.addEventSource({
+                url: url.href,
+                format: `ics`,
+            })
+            window.history.replaceState(null, document.title, url.search)
+        }
+
+        const qbox = document.getElementById("query")
+        let debounce
+        qbox.value = decodeURIComponent(url.search.substring(1))
+        qbox.addEventListener("input", () => {
+            if (debounce !== undefined) {
+                window.clearTimeout(debounce)
+            }
+            debounce = window.setTimeout(() => {
+                debounce = undefined
+                url.search = qbox.value
+                reload()
+            }, 250)
+        })
+
+        reload()
+    </script>
+</body>
+</html>

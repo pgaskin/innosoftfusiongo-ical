@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -138,6 +139,10 @@ func handle(w http.ResponseWriter, r *http.Request) {
 
 	// /{instance}.ics -> handleCalendar
 	if !strings.ContainsRune(p, '/') {
+		if instance, ok := strings.CutSuffix(p, ".html"); ok && instance != "" {
+			handleWeb(w, r, instance)
+			return
+		}
 		if instance, ok := strings.CutSuffix(p, ".ics"); ok && instance != "" {
 			handleCalendar(w, r, instance)
 			return
@@ -145,6 +150,19 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+}
+
+//go:embed calendar.html
+var calendarHTML []byte
+
+func handleWeb(w http.ResponseWriter, r *http.Request, instance string) {
+	w.Header().Set("Cache-Control", "private, no-cache, no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(calendarHTML)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(calendarHTML)
 }
 
 var (

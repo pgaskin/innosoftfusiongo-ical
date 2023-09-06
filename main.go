@@ -5,10 +5,8 @@ import (
 	"context"
 	"crypto/sha1"
 	_ "embed"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -24,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pgaskin/innosoftfusiongo-ical/fusiongo"
 )
 
 const EnvPrefix = "IFGICAL"
@@ -188,7 +188,7 @@ func handle(w http.ResponseWriter, r *http.Request) {
 //go:embed calendar.html
 var calendarHTML []byte
 
-func handleWeb(w http.ResponseWriter, r *http.Request, schoolID int) {
+func handleWeb(w http.ResponseWriter, _ *http.Request, _ int) {
 	w.Header().Set("Cache-Control", "private, no-cache, no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
@@ -202,8 +202,8 @@ var (
 	// TODO: refactor
 	cacheLock          sync.Mutex
 	cacheUpdated       = map[int]time.Time{}
-	cacheSchedules     = map[int][]byte{}
-	cacheNotifications = map[int][]byte{}
+	cacheSchedules     = map[int]*fusiongo.Schedule{}
+	cacheNotifications = map[int]*fusiongo.Notifications{}
 )
 
 func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
@@ -231,8 +231,8 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	)
 
 	var (
-		schedule      FusionSchedule
-		notifications FusionNotifications
+		schedule      *fusiongo.Schedule
+		notifications *fusiongo.Notifications
 	)
 	if err := func() error {
 		cacheLock.Lock()
@@ -245,14 +245,22 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			slog.Info("fusion data missing or stale; fetching", "instance", schoolID, "last_update", u, "cache_time", *CacheTime)
 			u = time.Now()
 
-			schedule, err := httpGet(ctx, "https://innosoftfusiongo.com/schools/school"+strconv.Itoa(schoolID)+"/schedule.json")
+			schedule, err := fusiongo.FetchSchedule(ctx, schoolID)
 			if err != nil {
 				return fmt.Errorf("get schedule: %w", err)
 			}
 
-			notifications, err := httpGet(ctx, "https://innosoftfusiongo.com/schools/school"+strconv.Itoa(schoolID)+"/notifications.json")
+			notifications, err := fusiongo.FetchNotifications(ctx, schoolID)
 			if err != nil {
 				return fmt.Errorf("get notifications: %w", err)
+			}
+
+			// do some cleanup
+			for ai, a := range schedule.Activities {
+				schedule.Activities[ai].Description = strings.TrimSpace(a.Description)
+			}
+			for ni, n := range notifications.Notifications {
+				notifications.Notifications[ni].Text = strings.TrimSpace(n.Text)
 			}
 
 			cacheUpdated[schoolID] = u
@@ -260,12 +268,9 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			cacheNotifications[schoolID] = notifications
 		}
 
-		if err := json.Unmarshal(cacheSchedules[schoolID], &schedule); err != nil {
-			return fmt.Errorf("parse schedule: %w", err)
-		}
-		if err := json.Unmarshal(cacheNotifications[schoolID], &notifications); err != nil {
-			return fmt.Errorf("parse notifications: %w", err)
-		}
+		schedule = cacheSchedules[schoolID]
+		notifications = cacheNotifications[schoolID]
+
 		return nil
 	}(); err != nil {
 		slog.Error("failed to fetch data", "error", err, "instance", schoolID)
@@ -283,79 +288,49 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			return err
 		}
 
-		// do some cleanup
-		for ci, c := range schedule.Categories {
-			for di, d := range c.Days {
-				for ai, a := range d.ScheduledActivities {
-					a.Description = strings.TrimSpace(a.Description)
-					schedule.Categories[ci].Days[di].ScheduledActivities[ai] = a
-				}
-			}
-		}
-
 		// check some basic assumptions
-		activityInstancesCheck := map[string]FusionScheduleActivity{}
-		for _, c := range schedule.Categories {
-			for _, d := range c.Days {
-				for _, a := range d.ScheduledActivities {
-					iid := fmt.Sprint(a.ActivityID, d.Date, a.StartTime, a.EndTime)
-					if x, ok := activityInstancesCheck[iid]; !ok {
-						activityInstancesCheck[iid] = a
-					} else if !reflect.DeepEqual(a, x) {
-						panic("wtf: activity instance is not uniquely identified by (id, date, start, end)")
-					}
-				}
+		// - we depend on the fact that an activity is uniquely identified by its id and can only occur once per start time per day
+		activityInstancesCheck := map[string]fusiongo.ActivityInstance{}
+		for _, a := range schedule.Activities {
+			iid := fmt.Sprint(a.ActivityID, a.Time.Date, a.Time.Start)
+			if x, ok := activityInstancesCheck[iid]; !ok {
+				activityInstancesCheck[iid] = a
+			} else if !reflect.DeepEqual(a, x) {
+				panic("wtf: activity instance is not uniquely identified by (id, date, start)")
 			}
 		}
 
 		type ActivityKey struct {
 			ActivityID string
 			Location   string
-			StartTime  FusionTime
-			EndTime    FusionTime
+			Time       fusiongo.TimeRange
 		}
 
 		type ActivityInstance struct {
 			Name        string
 			Description string
-			Date        FusionDate
-		}
-		type ActivityCategory struct {
-			Name string
-			ID   int
+			Date        fusiongo.Date
+			Categories  []string
+			CategoryIDs []string
 		}
 
 		// collect activity instance event info and group into recurrence groups
 		activities := map[ActivityKey][]ActivityInstance{}
-		activityCategories := map[ActivityKey][]ActivityCategory{}
-		for _, c := range schedule.Categories {
-			for _, d := range c.Days {
-				for _, a := range d.ScheduledActivities {
-					if a.IsCanceled == 0 {
-						activityKey := ActivityKey{
-							ActivityID: a.ActivityID,
-							StartTime:  a.StartTime,
-							Location:   a.Location,
-							EndTime:    a.EndTime,
-						}
-						activityInstance := ActivityInstance{
-							Name:        a.Activity,
-							Description: a.Description,
-							Date:        d.Date,
-						}
-						activityCategory := ActivityCategory{
-							Name: c.Category,
-							ID:   c.ID,
-						}
-						// activity instances can be duplicated across categories
-						if !slices.Contains(activities[activityKey], activityInstance) {
-							activities[activityKey] = append(activities[activityKey], activityInstance)
-						}
-						if !slices.Contains(activityCategories[activityKey], activityCategory) {
-							activityCategories[activityKey] = append(activityCategories[activityKey], activityCategory)
-						}
-					}
+		for ai, a := range schedule.Activities {
+			if !a.IsCanceled {
+				activityKey := ActivityKey{
+					ActivityID: a.ActivityID,
+					Time:       a.Time.TimeRange,
+					Location:   a.Location,
 				}
+				activityInstance := ActivityInstance{
+					Name:        a.Activity,
+					Description: a.Description,
+					Date:        a.Time.Date,
+					Categories:  schedule.Categories[ai].Category,
+					CategoryIDs: schedule.Categories[ai].CategoryID,
+				}
+				activities[activityKey] = append(activities[activityKey], activityInstance)
 			}
 		}
 
@@ -369,7 +344,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		}
 		sort.SliceStable(activityKeys, func(i, j int) bool {
 			if activityKeys[i].ActivityID == activityKeys[j].ActivityID {
-				return activityKeys[i].StartTime.Less(activityKeys[j].StartTime)
+				return activityKeys[i].Time.Less(activityKeys[j].Time)
 			}
 			return activityKeys[i].ActivityID < activityKeys[j].ActivityID
 		})
@@ -378,7 +353,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			Instance ActivityInstance
 
 			Recurrence map[time.Weekday]int
-			Last       FusionDate
+			Last       fusiongo.Date
 		}
 
 		// heuristically determine the recurrence info
@@ -404,7 +379,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 
 			// figure out the recurrence pattern
 			for _, activityInstance := range activityInstances {
-				base.Recurrence[time.Weekday(activityInstance.Date.Time(tz).Weekday())]++
+				base.Recurrence[time.Weekday(activityInstance.Date.In(tz).Weekday())]++
 			}
 
 			// find the first most common name
@@ -435,15 +410,13 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 
 		// get calendar boundaries
 		var calStart, calEnd time.Time
-		for _, c := range schedule.Categories {
-			for _, d := range c.Days {
-				t := d.Date.Time(tz)
-				if calStart.IsZero() || t.Before(calStart) {
-					calStart = t
-				}
-				if calEnd.IsZero() || t.After(calEnd) {
-					calStart = t
-				}
+		for _, a := range schedule.Activities {
+			aStart, aEnd := a.Time.In(tz)
+			if calStart.IsZero() || aStart.Before(calStart) {
+				calStart = aStart
+			}
+			if calEnd.IsZero() || aEnd.After(calEnd) {
+				calStart = aEnd
 			}
 		}
 		if calStart.IsZero() {
@@ -458,13 +431,6 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		for _, activityKey := range activityKeys {
 			if !f_location.Match(activityKey.Location) {
 				// location doesn't match
-				activityKeyExcludes[activityKey] = true
-				continue
-			}
-			if !slices.ContainsFunc(activityCategories[activityKey], func(activityCategory ActivityCategory) bool {
-				return f_category.Match(activityCategory.Name) && f_category_id.Match(strconv.Itoa(activityCategory.ID))
-			}) {
-				// no matching categories
 				activityKeyExcludes[activityKey] = true
 				continue
 			}
@@ -526,8 +492,8 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			uid := fmt.Sprintf(
 				"%s-%x-%02d%02d%02d-%02d%02d%02d@school%d.innosoftfusiongo.com",
 				activityKey.ActivityID, sha1.Sum([]byte(activityKey.Location)),
-				activityKey.StartTime.Hour, activityKey.StartTime.Minute, activityKey.StartTime.Second,
-				activityKey.EndTime.Hour, activityKey.EndTime.Minute, activityKey.EndTime.Second,
+				activityKey.Time.Start.Hour, activityKey.Time.Start.Minute, activityKey.Time.Start.Second,
+				activityKey.Time.End.Hour, activityKey.Time.End.Minute, activityKey.Time.End.Second,
 				schoolID,
 			)
 			if len(uid) >= 255 {
@@ -563,26 +529,32 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			}
 			fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
 			fmt.Fprintf(&ical, "UID:%s\r\n", uid)
-			fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.LastUpdate.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
+			fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
 			fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(base.Instance.Name))
 			fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
 			fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(base.Instance.Description))
-			fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.Time(base.Instance.Date.Time(tz)).Format("20060102T150405")) // local
-			fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityKey.EndTime.Time(base.Instance.Date.Time(tz)).Format("20060102T150405"))     // local
+			fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.Time.WithDate(base.Instance.Date).StartIn(tz).Format("20060102T150405")) // local
+			fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityKey.Time.WithDate(base.Instance.Date).EndIn(tz).Format("20060102T150405"))     // local
 			if base.Recurrence != nil {
-				fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", activityKey.EndTime.Time(base.Last.Time(tz)).Format("20060102T150405"), strings.Join(byday, ",")) // local if dtstart is local, else utc
-				for d := base.Instance.Date.Time(tz); !base.Last.Time(tz).Before(d); d = d.AddDate(0, 0, 1) {
+				fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", activityKey.Time.End.WithDate(base.Last).In(tz).Format("20060102T150405"), strings.Join(byday, ",")) // local if dtstart is local, else utc
+				for d := base.Instance.Date.In(tz); !base.Last.In(tz).Before(d); d = d.AddDate(0, 0, 1) {
 					if base.Recurrence[d.Weekday()] > 0 {
 						if dy, dm, dd := d.Date(); !slices.ContainsFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
-							if activityInstance.Date != (FusionDate{Year: dy, Month: dm, Day: dd}) {
+							if activityInstance.Date != (fusiongo.Date{Year: dy, Month: dm, Day: dd}) {
 								return false
 							}
 							if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
 								return false
 							}
+							if !slices.ContainsFunc(activityInstance.Categories, f_category.Match) {
+								return false
+							}
+							if !slices.ContainsFunc(activityInstance.CategoryIDs, f_category_id.Match) {
+								return false
+							}
 							return true
 						}) {
-							fmt.Fprintf(&ical, "EXDATE;TZID=%s:%s\r\n", tz, activityKey.StartTime.Time(d).Format("20060102T150405"))
+							fmt.Fprintf(&ical, "EXDATE;TZID=%s:%s\r\n", tz, activityKey.Time.Start.WithDate(fusiongo.Date{Year: dy, Month: dm, Day: dd}).In(tz).Format("20060102T150405"))
 						}
 					}
 				}
@@ -596,17 +568,23 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 						if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
 							continue
 						}
+						if !slices.ContainsFunc(activityInstance.Categories, f_category.Match) {
+							continue
+						}
+						if !slices.ContainsFunc(activityInstance.CategoryIDs, f_category_id.Match) {
+							continue
+						}
 						fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
 						fmt.Fprintf(&ical, "UID:%s\r\n", uid)
-						fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.LastUpdate.UTC().Format("20060102T150405Z"))       // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
-						fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", schedule.LastUpdate.UTC().Format("20060102T150405Z")) // utc
+						fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z"))       // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
+						fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc
 						fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(activityInstance.Name))
 						fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
 						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(activityInstance.Description))
-						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.Time(activityInstance.Date.Time(tz)).Format("20060102T150405")) // local
-						fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityKey.EndTime.Time(activityInstance.Date.Time(tz)).Format("20060102T150405"))     // local
+						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.Time.Start.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
+						fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityKey.Time.End.WithDate(activityInstance.Date).In(tz).Format("20060102T150405"))     // local
 						if base.Recurrence != nil {
-							fmt.Fprintf(&ical, "RECURRENCE-ID;TZID=%s:%s\r\n", tz, activityKey.StartTime.Time(activityInstance.Date.Time(tz)).Format("20060102T150405")) // local
+							fmt.Fprintf(&ical, "RECURRENCE-ID;TZID=%s:%s\r\n", tz, activityKey.Time.Start.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
 						}
 						fmt.Fprintf(&ical, "END:VEVENT\r\n")
 					}
@@ -616,50 +594,49 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		if !o_no_canceled {
 			// add new placeholder events for cancellations
 			// this works around issues where some clients don't handle later excluded events properly
-			seenCancel := map[FusionScheduleActivity]struct{}{}
-			for _, c := range schedule.Categories {
-				for _, d := range c.Days {
-					for _, a := range d.ScheduledActivities {
-						if a.IsCanceled == 0 {
-							continue
-						}
-						if !f_category.Match(c.Category) || !f_category_id.Match(strconv.Itoa(c.ID)) {
-							continue
-						}
-						if !f_activity.Match(a.Activity) || !f_activity_id.Match(a.ActivityID) {
-							continue
-						}
-						if !f_location.Match(a.Location) {
-							continue
-						}
-						if _, seen := seenCancel[a]; seen {
-							continue
-						} else {
-							seenCancel[a] = struct{}{}
-						}
-						uid := fmt.Sprintf(
-							"%s-%x-%02d%02d%02d-%02d%02d%02d-cancel-%04d%02d%02d@school%d.innosoftfusiongo.com",
-							a.ActivityID, sha1.Sum([]byte(a.Location)),
-							a.StartTime.Hour, a.StartTime.Minute, a.StartTime.Second,
-							a.EndTime.Hour, a.EndTime.Minute, a.EndTime.Second,
-							d.Date.Year, d.Date.Month, d.Date.Day,
-							schoolID,
-						)
-						if len(uid) >= 255 {
-							panic("wtf: generated uid too long")
-						}
-						fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
-						fmt.Fprintf(&ical, "UID:%s\r\n", uid)
-						fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.LastUpdate.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
-						fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace("CANCELLED - "+a.Activity))
-						fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
-						fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(a.Location))
-						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(a.Description))
-						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, a.StartTime.Time(d.Date.Time(tz)).Format("20060102T150405")) // local
-						fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, a.EndTime.Time(d.Date.Time(tz)).Format("20060102T150405"))     // local
-						fmt.Fprintf(&ical, "END:VEVENT\r\n")
-					}
+			seenCancel := map[fusiongo.ActivityInstance]struct{}{}
+			for ai, a := range schedule.Activities {
+				if !a.IsCanceled {
+					continue
 				}
+				if !slices.ContainsFunc(schedule.Categories[ai].Category, f_category.Match) {
+					continue
+				}
+				if !slices.ContainsFunc(schedule.Categories[ai].CategoryID, f_category_id.Match) {
+					continue
+				}
+				if !f_activity.Match(a.Activity) || !f_activity_id.Match(a.ActivityID) {
+					continue
+				}
+				if !f_location.Match(a.Location) {
+					continue
+				}
+				if _, seen := seenCancel[a]; seen {
+					continue
+				} else {
+					seenCancel[a] = struct{}{}
+				}
+				uid := fmt.Sprintf(
+					"%s-%x-%02d%02d%02d-%02d%02d%02d-cancel-%04d%02d%02d@school%d.innosoftfusiongo.com",
+					a.ActivityID, sha1.Sum([]byte(a.Location)),
+					a.Time.Start.Hour, a.Time.Start.Minute, a.Time.Start.Second,
+					a.Time.End.Hour, a.Time.End.Minute, a.Time.End.Second,
+					a.Time.Date.Year, a.Time.Date.Month, a.Time.Date.Day,
+					schoolID,
+				)
+				if len(uid) >= 255 {
+					panic("wtf: generated uid too long")
+				}
+				fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
+				fmt.Fprintf(&ical, "UID:%s\r\n", uid)
+				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
+				fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace("CANCELLED - "+a.Activity))
+				fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
+				fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(a.Location))
+				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(a.Description))
+				fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, a.Time.StartIn(tz).Format("20060102T150405")) // local
+				fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, a.Time.EndIn(tz).Format("20060102T150405"))     // local
+				fmt.Fprintf(&ical, "END:VEVENT\r\n")
 			}
 		}
 		if !o_no_notifications {
@@ -667,22 +644,17 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			for _, n := range notifications.Notifications {
 				// https://stackoverflow.com/questions/1716237/single-day-all-day-appointments-in-ics-files
 
-				notificationDate := time.Now()
-				if v, err := time.ParseInLocation("2006-01-02 15:04:05", n.Sent, tz); err == nil {
-					notificationDate = v
-				}
-
-				uid := fmt.Sprintf("notification-%d@%d.innosoftfusiongo.com", n.ID, schoolID)
+				uid := fmt.Sprintf("notification-%s@school%d.innosoftfusiongo.com", n.ID, schoolID)
 				if len(uid) >= 255 {
 					panic("wtf: generated uid too long")
 				}
 				fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
 				fmt.Fprintf(&ical, "UID:%s\r\n", uid)
 				fmt.Fprintf(&ical, "SEQUENCE:1\r\n")
-				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", notifications.LastUpdate.UTC().Format("20060102T150405Z")) // utc
-				fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(n.Notification))
-				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(n.Notification))
-				fmt.Fprintf(&ical, "DTSTART;VALUE=DATE;TZID=%s:%s\r\n", tz, notificationDate.In(tz).Format("20060102")) // local
+				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", notifications.Updated.UTC().Format("20060102T150405Z")) // utc
+				fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(n.Text))
+				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(n.Text))
+				fmt.Fprintf(&ical, "DTSTART;VALUE=DATE;TZID=%s:%s\r\n", tz, n.Sent.In(tz).Format("20060102")) // local
 				fmt.Fprintf(&ical, "END:VEVENT\r\n")
 			}
 		}
@@ -699,29 +671,6 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	w.Header().Set("Content-Length", strconv.Itoa(ical.Len()))
 	w.WriteHeader(http.StatusOK)
 	ical.WriteTo(w)
-}
-
-func httpGet(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	buf, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("response status %d (%s)", resp.StatusCode, resp.Status)
-	}
-	return buf, nil
 }
 
 type filterer struct {

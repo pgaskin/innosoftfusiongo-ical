@@ -18,7 +18,7 @@ func (v DateTimeRange) String() string {
 
 func (v DateTimeRange) In(loc *time.Location) (start, end time.Time) {
 	start = v.Start.WithDate(v.Date).In(loc)
-	end = v.Start.WithDate(v.Date).In(loc)
+	end = v.End.WithDate(v.Date).In(loc)
 	if end.Before(start) {
 		end = end.AddDate(0, 0, 1)
 	}

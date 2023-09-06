@@ -226,12 +226,10 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		f_activity_id = filterer{Negation: true, Wildcard: false, CaseFold: true, Collapse: true, Patterns: q["activity_id"]}
 		f_location    = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["location"]}
 
-		_, o_no_notifications = q["no_notifications"]
-		_, o_no_cancelled     = q["no_cancelled"]
+		_, o_no_notifications  = q["no_notifications"]
+		_, o_fake_cancelled    = q["fake_cancelled"]   // don't set the cancellation status on cancelled events (e.g., if you want outlook mobile to still show the events)
+		_, o_exclude_cancelled = q["delete_cancelled"] // entirely exclude cancelled events
 	)
-	if _, o_no_canceled := q["no_canceled"]; o_no_canceled {
-		o_no_cancelled = o_no_canceled
-	}
 
 	var (
 		schedule      *fusiongo.Schedule
@@ -559,7 +557,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 							if activityInstance.Date != (fusiongo.Date{Year: dy, Month: dm, Day: dd}) {
 								return false
 							}
-							if activityInstance.IsCancelled && o_no_cancelled {
+							if activityInstance.IsCancelled && o_exclude_cancelled {
 								return false
 							}
 							if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
@@ -583,7 +581,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			// write recurrence exceptions
 			if base.Recurrence != nil {
 				for _, activityInstance := range activities[activityKey] {
-					if activityInstance.IsCancelled && o_no_cancelled {
+					if activityInstance.IsCancelled && o_exclude_cancelled {
 						continue
 					}
 					if activityInstance.Name != base.Instance.Name || activityInstance.Description != base.Instance.Description || activityInstance.IsCancelled {
@@ -604,7 +602,9 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 							fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(activityInstance.Name))
 						} else {
 							fmt.Fprintf(&ical, "SUMMARY:CANCELLED - %s\r\n", icalTextEscape.Replace(activityInstance.Name))
-							fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
+							if !o_fake_cancelled {
+								fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
+							}
 						}
 						fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
 						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(activityInstance.Description))

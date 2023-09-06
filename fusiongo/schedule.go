@@ -22,7 +22,7 @@ type ActivityInstance struct {
 	ActivityID  string
 	Location    string
 	Description string
-	IsCanceled  bool
+	IsCancelled bool
 }
 
 type ActivityCategory struct {
@@ -220,7 +220,7 @@ func parseActivityInstance(value gjson.Result) (activity ActivityInstance, err e
 		case "description":
 			activity.Description = strings.TrimSpace(value.Str)
 		case "isCancelled":
-			activity.IsCanceled = value.Bool() // truthy, not strict bool
+			activity.IsCancelled = value.Bool() // truthy, not strict bool
 		case "activityID":
 			activity.ActivityID = value.Str
 		}

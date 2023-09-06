@@ -227,8 +227,11 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		f_location    = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["location"]}
 
 		_, o_no_notifications = q["no_notifications"]
-		_, o_no_canceled      = q["no_canceled"]
+		_, o_no_cancelled     = q["no_cancelled"]
 	)
+	if _, o_no_canceled := q["no_canceled"]; o_no_canceled {
+		o_no_cancelled = o_no_canceled
+	}
 
 	var (
 		schedule      *fusiongo.Schedule
@@ -290,13 +293,17 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 
 		// check some basic assumptions
 		// - we depend on the fact that an activity is uniquely identified by its id and can only occur once per start time per day
+		// - we also depend on each activity having at least one category
 		activityInstancesCheck := map[string]fusiongo.ActivityInstance{}
-		for _, a := range schedule.Activities {
+		for ai, a := range schedule.Activities {
 			iid := fmt.Sprint(a.ActivityID, a.Time.Date, a.Time.Start)
 			if x, ok := activityInstancesCheck[iid]; !ok {
 				activityInstancesCheck[iid] = a
 			} else if !reflect.DeepEqual(a, x) {
 				panic("wtf: activity instance is not uniquely identified by (id, date, start)")
+			}
+			if len(schedule.Categories[ai].Category) == 0 {
+				panic("wtf: expected activity instance to have at least one category")
 			}
 		}
 
@@ -307,6 +314,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		}
 
 		type ActivityInstance struct {
+			IsCancelled bool
 			Name        string
 			Description string
 			Date        fusiongo.Date
@@ -317,21 +325,20 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		// collect activity instance event info and group into recurrence groups
 		activities := map[ActivityKey][]ActivityInstance{}
 		for ai, a := range schedule.Activities {
-			if !a.IsCanceled {
-				activityKey := ActivityKey{
-					ActivityID: a.ActivityID,
-					Time:       a.Time.TimeRange,
-					Location:   a.Location,
-				}
-				activityInstance := ActivityInstance{
-					Name:        a.Activity,
-					Description: a.Description,
-					Date:        a.Time.Date,
-					Categories:  schedule.Categories[ai].Category,
-					CategoryIDs: schedule.Categories[ai].CategoryID,
-				}
-				activities[activityKey] = append(activities[activityKey], activityInstance)
+			activityKey := ActivityKey{
+				ActivityID: a.ActivityID,
+				Time:       a.Time.TimeRange,
+				Location:   a.Location,
 			}
+			activityInstance := ActivityInstance{
+				IsCancelled: a.IsCancelled,
+				Name:        a.Activity,
+				Description: a.Description,
+				Date:        a.Time.Date,
+				Categories:  schedule.Categories[ai].Category,
+				CategoryIDs: schedule.Categories[ai].CategoryID,
+			}
+			activities[activityKey] = append(activities[activityKey], activityInstance)
 		}
 
 		// deterministically sort the map
@@ -435,7 +442,16 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 				continue
 			}
 			if !slices.ContainsFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
-				return f_activity.Match(activityInstance.Name) && f_activity_id.Match(activityKey.ActivityID)
+				if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
+					return false
+				}
+				if !slices.ContainsFunc(activityInstance.Categories, f_category.Match) {
+					return false
+				}
+				if !slices.ContainsFunc(activityInstance.CategoryIDs, f_category_id.Match) {
+					return false
+				}
+				return true
 			}) {
 				// no matching instances
 				activityKeyExcludes[activityKey] = true
@@ -543,6 +559,9 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 							if activityInstance.Date != (fusiongo.Date{Year: dy, Month: dm, Day: dd}) {
 								return false
 							}
+							if activityInstance.IsCancelled && o_no_cancelled {
+								return false
+							}
 							if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
 								return false
 							}
@@ -564,7 +583,10 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			// write recurrence exceptions
 			if base.Recurrence != nil {
 				for _, activityInstance := range activities[activityKey] {
-					if activityInstance.Name != base.Instance.Name || activityInstance.Description != base.Instance.Description {
+					if activityInstance.IsCancelled && o_no_cancelled {
+						continue
+					}
+					if activityInstance.Name != base.Instance.Name || activityInstance.Description != base.Instance.Description || activityInstance.IsCancelled {
 						if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
 							continue
 						}
@@ -578,7 +600,12 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 						fmt.Fprintf(&ical, "UID:%s\r\n", uid)
 						fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z"))       // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
 						fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc
-						fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(activityInstance.Name))
+						if !activityInstance.IsCancelled {
+							fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(activityInstance.Name))
+						} else {
+							fmt.Fprintf(&ical, "SUMMARY:CANCELLED - %s\r\n", icalTextEscape.Replace(activityInstance.Name))
+							fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
+						}
 						fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
 						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(activityInstance.Description))
 						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.Time.Start.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
@@ -589,54 +616,6 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 						fmt.Fprintf(&ical, "END:VEVENT\r\n")
 					}
 				}
-			}
-		}
-		if !o_no_canceled {
-			// add new placeholder events for cancellations
-			// this works around issues where some clients don't handle later excluded events properly
-			seenCancel := map[fusiongo.ActivityInstance]struct{}{}
-			for ai, a := range schedule.Activities {
-				if !a.IsCanceled {
-					continue
-				}
-				if !slices.ContainsFunc(schedule.Categories[ai].Category, f_category.Match) {
-					continue
-				}
-				if !slices.ContainsFunc(schedule.Categories[ai].CategoryID, f_category_id.Match) {
-					continue
-				}
-				if !f_activity.Match(a.Activity) || !f_activity_id.Match(a.ActivityID) {
-					continue
-				}
-				if !f_location.Match(a.Location) {
-					continue
-				}
-				if _, seen := seenCancel[a]; seen {
-					continue
-				} else {
-					seenCancel[a] = struct{}{}
-				}
-				uid := fmt.Sprintf(
-					"%s-%x-%02d%02d%02d-%02d%02d%02d-cancel-%04d%02d%02d@school%d.innosoftfusiongo.com",
-					a.ActivityID, sha1.Sum([]byte(a.Location)),
-					a.Time.Start.Hour, a.Time.Start.Minute, a.Time.Start.Second,
-					a.Time.End.Hour, a.Time.End.Minute, a.Time.End.Second,
-					a.Time.Date.Year, a.Time.Date.Month, a.Time.Date.Day,
-					schoolID,
-				)
-				if len(uid) >= 255 {
-					panic("wtf: generated uid too long")
-				}
-				fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
-				fmt.Fprintf(&ical, "UID:%s\r\n", uid)
-				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
-				fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace("CANCELLED - "+a.Activity))
-				fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
-				fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(a.Location))
-				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(a.Description))
-				fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, a.Time.StartIn(tz).Format("20060102T150405")) // local
-				fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, a.Time.EndIn(tz).Format("20060102T150405"))     // local
-				fmt.Fprintf(&ical, "END:VEVENT\r\n")
 			}
 		}
 		if !o_no_notifications {

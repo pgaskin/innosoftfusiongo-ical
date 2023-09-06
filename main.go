@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -139,12 +138,46 @@ func handle(w http.ResponseWriter, r *http.Request) {
 
 	// /{instance}.ics -> handleCalendar
 	if !strings.ContainsRune(p, '/') {
-		if instance, ok := strings.CutSuffix(p, ".html"); ok && instance != "" {
-			handleWeb(w, r, instance)
-			return
-		}
-		if instance, ok := strings.CutSuffix(p, ".ics"); ok && instance != "" {
-			handleCalendar(w, r, instance)
+		if instance, ext, ok := strings.Cut(p, "."); ok {
+			if instance, _ := strings.CutPrefix(instance, "school"); instance != "" {
+				if schoolID, _ := strconv.ParseInt(instance, 10, 64); schoolID != 0 {
+					if whitelist := *InstanceWhitelist; whitelist != "" {
+						var (
+							match           bool
+							more            bool
+							instanceCurrent string
+							instanceShort   = strconv.FormatInt(schoolID, 10)
+							instanceLong    = "school" + instanceShort
+						)
+						for {
+							instanceCurrent, whitelist, more = strings.Cut(whitelist, ",")
+							instanceCurrent = strings.TrimSpace(instanceCurrent)
+							if instanceCurrent == instanceShort || instanceCurrent == instanceLong {
+								match = true
+								break
+							}
+							if !more {
+								break
+							}
+						}
+						if !match {
+							http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
+							return
+						}
+					}
+					switch strings.ToLower(ext) {
+					case "html":
+						handleWeb(w, r, int(schoolID))
+						return
+					case "ics":
+						handleCalendar(w, r, int(schoolID))
+						return
+					}
+					http.Error(w, fmt.Sprintf("No handler for extension %q", ext), http.StatusNotFound)
+					return
+				}
+			}
+			http.Error(w, fmt.Sprintf("Invalid instance %q", instance), http.StatusBadRequest)
 			return
 		}
 	}
@@ -155,7 +188,7 @@ func handle(w http.ResponseWriter, r *http.Request) {
 //go:embed calendar.html
 var calendarHTML []byte
 
-func handleWeb(w http.ResponseWriter, r *http.Request, instance string) {
+func handleWeb(w http.ResponseWriter, r *http.Request, schoolID int) {
 	w.Header().Set("Cache-Control", "private, no-cache, no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
@@ -168,26 +201,18 @@ func handleWeb(w http.ResponseWriter, r *http.Request, instance string) {
 var (
 	// TODO: refactor
 	cacheLock          sync.Mutex
-	cacheUpdated       = map[string]time.Time{}
-	cacheSchedules     = map[string][]byte{}
-	cacheNotifications = map[string][]byte{}
+	cacheUpdated       = map[int]time.Time{}
+	cacheSchedules     = map[int][]byte{}
+	cacheNotifications = map[int][]byte{}
 )
 
-func handleCalendar(w http.ResponseWriter, r *http.Request, instance string) {
+func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	w.Header().Set("Cache-Control", "private, no-cache, no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
 
-	if *InstanceWhitelist != "" {
-		if !slices.Contains(strings.Split(*InstanceWhitelist, ","), instance) {
-			slog.Info("calendar request to non-whitelisted instance rejected", "remote", r.RemoteAddr, "instance", instance)
-			http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
-			return
-		}
-	}
-
 	if cur, lim := len(r.URL.RawQuery), 512; cur > lim {
-		slog.Info("rejected request with long query string", "remote", r.RemoteAddr, "instance", instance)
+		slog.Info("rejected request with long query string", "remote", r.RemoteAddr, "instance", schoolID)
 		http.Error(w, fmt.Sprintf("Request query too long (%d > %d)", cur, lim), http.StatusRequestURITooLong)
 		return
 	}
@@ -216,34 +241,34 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, instance string) {
 		ctx, cancel := context.WithTimeout(context.Background(), *Timeout)
 		defer cancel()
 
-		if u, ok := cacheUpdated[instance]; !ok || time.Since(u) > *CacheTime {
-			slog.Info("fusion data missing or stale; fetching", "instance", instance, "last_update", u, "cache_time", *CacheTime)
+		if u, ok := cacheUpdated[schoolID]; !ok || time.Since(u) > *CacheTime {
+			slog.Info("fusion data missing or stale; fetching", "instance", schoolID, "last_update", u, "cache_time", *CacheTime)
 			u = time.Now()
 
-			schedule, err := httpGet(ctx, "https://innosoftfusiongo.com/schools/"+url.PathEscape(instance)+"/schedule.json")
+			schedule, err := httpGet(ctx, "https://innosoftfusiongo.com/schools/school"+strconv.Itoa(schoolID)+"/schedule.json")
 			if err != nil {
 				return fmt.Errorf("get schedule: %w", err)
 			}
 
-			notifications, err := httpGet(ctx, "https://innosoftfusiongo.com/schools/"+url.PathEscape(instance)+"/notifications.json")
+			notifications, err := httpGet(ctx, "https://innosoftfusiongo.com/schools/school"+strconv.Itoa(schoolID)+"/notifications.json")
 			if err != nil {
 				return fmt.Errorf("get notifications: %w", err)
 			}
 
-			cacheUpdated[instance] = u
-			cacheSchedules[instance] = schedule
-			cacheNotifications[instance] = notifications
+			cacheUpdated[schoolID] = u
+			cacheSchedules[schoolID] = schedule
+			cacheNotifications[schoolID] = notifications
 		}
 
-		if err := json.Unmarshal(cacheSchedules[instance], &schedule); err != nil {
+		if err := json.Unmarshal(cacheSchedules[schoolID], &schedule); err != nil {
 			return fmt.Errorf("parse schedule: %w", err)
 		}
-		if err := json.Unmarshal(cacheNotifications[instance], &notifications); err != nil {
+		if err := json.Unmarshal(cacheNotifications[schoolID], &notifications); err != nil {
 			return fmt.Errorf("parse notifications: %w", err)
 		}
 		return nil
 	}(); err != nil {
-		slog.Error("failed to fetch data", "error", err, "instance", instance)
+		slog.Error("failed to fetch data", "error", err, "instance", schoolID)
 		http.Error(w, fmt.Sprintf("Failed to fetch data: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -499,11 +524,11 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, instance string) {
 
 			// generate a uid from all fields of activityKey
 			uid := fmt.Sprintf(
-				"%s-%x-%02d%02d%02d-%02d%02d%02d@%s.innosoftfusiongo.com",
+				"%s-%x-%02d%02d%02d-%02d%02d%02d@school%d.innosoftfusiongo.com",
 				activityKey.ActivityID, sha1.Sum([]byte(activityKey.Location)),
 				activityKey.StartTime.Hour, activityKey.StartTime.Minute, activityKey.StartTime.Second,
 				activityKey.EndTime.Hour, activityKey.EndTime.Minute, activityKey.EndTime.Second,
-				instance,
+				schoolID,
 			)
 			if len(uid) >= 255 {
 				panic("wtf: generated uid too long")
@@ -613,12 +638,12 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, instance string) {
 							seenCancel[a] = struct{}{}
 						}
 						uid := fmt.Sprintf(
-							"%s-%x-%02d%02d%02d-%02d%02d%02d-cancel-%04d%02d%02d@%s.innosoftfusiongo.com",
+							"%s-%x-%02d%02d%02d-%02d%02d%02d-cancel-%04d%02d%02d@school%d.innosoftfusiongo.com",
 							a.ActivityID, sha1.Sum([]byte(a.Location)),
 							a.StartTime.Hour, a.StartTime.Minute, a.StartTime.Second,
 							a.EndTime.Hour, a.EndTime.Minute, a.EndTime.Second,
 							d.Date.Year, d.Date.Month, d.Date.Day,
-							instance,
+							schoolID,
 						)
 						if len(uid) >= 255 {
 							panic("wtf: generated uid too long")
@@ -647,7 +672,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, instance string) {
 					notificationDate = v
 				}
 
-				uid := fmt.Sprintf("notification-%d@%s.innosoftfusiongo.com", n.ID, instance)
+				uid := fmt.Sprintf("notification-%d@%d.innosoftfusiongo.com", n.ID, schoolID)
 				if len(uid) >= 255 {
 					panic("wtf: generated uid too long")
 				}
@@ -665,7 +690,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, instance string) {
 
 		return nil
 	}(); err != nil {
-		slog.Error("failed to generate calendar", "error", err, "instance", instance)
+		slog.Error("failed to generate calendar", "error", err, "instance", schoolID)
 		http.Error(w, fmt.Sprintf("Failed to generate calendar: %v", err), http.StatusInternalServerError)
 		return
 	}

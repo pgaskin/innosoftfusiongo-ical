@@ -200,10 +200,9 @@ func handleWeb(w http.ResponseWriter, _ *http.Request, _ int) {
 
 var (
 	// TODO: refactor
-	cacheLock          sync.Mutex
-	cacheUpdated       = map[int]time.Time{}
-	cacheSchedules     = map[int]*fusiongo.Schedule{}
-	cacheNotifications = map[int]*fusiongo.Notifications{}
+	cacheLock     sync.Mutex
+	cacheUpdated  = map[int]time.Time{}
+	cacheCalendar = map[int]generateCalendarFunc{}
 )
 
 func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
@@ -219,22 +218,17 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 
 	q := r.URL.Query()
 
-	var (
-		f_category    = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["category"]}
-		f_category_id = filterer{Negation: true, Wildcard: false, CaseFold: true, Collapse: true, Patterns: q["category_id"]}
-		f_activity    = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["activity"]}
-		f_activity_id = filterer{Negation: true, Wildcard: false, CaseFold: true, Collapse: true, Patterns: q["activity_id"]}
-		f_location    = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["location"]}
+	var opt generateCalendarOptions
+	opt.Category = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["category"]}
+	opt.CategoryID = filterer{Negation: true, Wildcard: false, CaseFold: true, Collapse: true, Patterns: q["category_id"]}
+	opt.Activity = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["activity"]}
+	opt.ActivityID = filterer{Negation: true, Wildcard: false, CaseFold: true, Collapse: true, Patterns: q["activity_id"]}
+	opt.Location = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["location"]}
+	_, opt.NoNotifications = q["no_notifications"]
+	_, opt.FakeCancelled = q["fake_cancelled"]     // don't set the cancellation status on cancelled events (e.g., if you want outlook mobile to still show the events)
+	_, opt.DeleteCancelled = q["delete_cancelled"] // entirely exclude cancelled events
 
-		_, o_no_notifications  = q["no_notifications"]
-		_, o_fake_cancelled    = q["fake_cancelled"]   // don't set the cancellation status on cancelled events (e.g., if you want outlook mobile to still show the events)
-		_, o_exclude_cancelled = q["delete_cancelled"] // entirely exclude cancelled events
-	)
-
-	var (
-		schedule      *fusiongo.Schedule
-		notifications *fusiongo.Notifications
-	)
+	var generateCalendar generateCalendarFunc
 	if err := func() error {
 		cacheLock.Lock()
 		defer cacheLock.Unlock()
@@ -246,31 +240,16 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			slog.Info("fusion data missing or stale; fetching", "instance", schoolID, "last_update", u, "cache_time", *CacheTime)
 			u = time.Now()
 
-			schedule, err := fusiongo.FetchSchedule(ctx, schoolID)
+			generateCalendar, err := prepareCalendar(ctx, schoolID)
 			if err != nil {
-				return fmt.Errorf("get schedule: %w", err)
-			}
-
-			notifications, err := fusiongo.FetchNotifications(ctx, schoolID)
-			if err != nil {
-				return fmt.Errorf("get notifications: %w", err)
-			}
-
-			// do some cleanup
-			for ai, a := range schedule.Activities {
-				schedule.Activities[ai].Description = strings.TrimSpace(a.Description)
-			}
-			for ni, n := range notifications.Notifications {
-				notifications.Notifications[ni].Text = strings.TrimSpace(n.Text)
+				return fmt.Errorf("prepare calendar: %w", err)
 			}
 
 			cacheUpdated[schoolID] = u
-			cacheSchedules[schoolID] = schedule
-			cacheNotifications[schoolID] = notifications
+			cacheCalendar[schoolID] = generateCalendar
 		}
 
-		schedule = cacheSchedules[schoolID]
-		notifications = cacheNotifications[schoolID]
+		generateCalendar = cacheCalendar[schoolID]
 
 		return nil
 	}(); err != nil {
@@ -279,174 +258,218 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		return
 	}
 
-	// TODO: refactor
+	buf := generateCalendar(&opt)
+	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(buf)
+}
 
-	var ical bytes.Buffer
-	if err := func() error {
-		// get the schedule timezone
-		tz, err := time.LoadLocation("America/Toronto")
-		if err != nil {
-			return err
-		}
+type generateCalendarOptions struct {
+	Category   filterer
+	CategoryID filterer
+	Activity   filterer
+	ActivityID filterer
+	Location   filterer
 
-		// check some basic assumptions
-		// - we depend on the fact that an activity is uniquely identified by its id and can only occur once per start time per day
-		// - we also depend on each activity having at least one category
-		activityInstancesCheck := map[string]fusiongo.ActivityInstance{}
-		for ai, a := range schedule.Activities {
-			iid := fmt.Sprint(a.ActivityID, a.Time.Date, a.Time.Start)
-			if x, ok := activityInstancesCheck[iid]; !ok {
-				activityInstancesCheck[iid] = a
-			} else if !reflect.DeepEqual(a, x) {
-				panic("wtf: activity instance is not uniquely identified by (id, date, start)")
-			}
-			if len(schedule.Categories[ai].Category) == 0 {
-				panic("wtf: expected activity instance to have at least one category")
-			}
-		}
+	// Don't include notifications in the calendar.
+	NoNotifications bool
 
-		type ActivityKey struct {
-			ActivityID string
-			Location   string
-			Time       fusiongo.TimeRange
-		}
+	// Don't set the cancellation status on cancelled events (e.g., if you want outlook mobile to still show the events).
+	FakeCancelled bool
 
-		type ActivityInstance struct {
-			IsCancelled bool
-			Name        string
-			Description string
-			Date        fusiongo.Date
-			Categories  []string
-			CategoryIDs []string
-		}
+	// Entirely exclude cancelled events.
+	DeleteCancelled bool
+}
 
-		// collect activity instance event info and group into recurrence groups
-		activities := map[ActivityKey][]ActivityInstance{}
-		for ai, a := range schedule.Activities {
-			activityKey := ActivityKey{
-				ActivityID: a.ActivityID,
-				Time:       a.Time.TimeRange,
-				Location:   a.Location,
-			}
-			activityInstance := ActivityInstance{
-				IsCancelled: a.IsCancelled,
-				Name:        a.Activity,
-				Description: a.Description,
-				Date:        a.Time.Date,
-				Categories:  schedule.Categories[ai].Category,
-				CategoryIDs: schedule.Categories[ai].CategoryID,
-			}
-			activities[activityKey] = append(activities[activityKey], activityInstance)
-		}
+type generateCalendarFunc func(*generateCalendarOptions) []byte
 
-		// deterministically sort the map
-		activityKeys := make([]ActivityKey, 0, len(activities))
-		for activityKey, activityInstances := range activities {
-			sort.SliceStable(activityInstances, func(i, j int) bool {
-				return activityInstances[i].Date.Less(activityInstances[j].Date)
-			})
-			activityKeys = append(activityKeys, activityKey)
+func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, error) {
+	// get the schedule timezone
+	tz, err := time.LoadLocation("America/Toronto")
+	if err != nil {
+		return nil, fmt.Errorf("load timezone: %w", err)
+	}
+
+	// load schedule
+	schedule, err := fusiongo.FetchSchedule(ctx, schoolID)
+	if err != nil {
+		return nil, fmt.Errorf("load schedule: %w", err)
+	}
+
+	// load notifications
+	notifications, err := fusiongo.FetchNotifications(ctx, schoolID)
+	if err != nil {
+		return nil, fmt.Errorf("load notifications: %w", err)
+	}
+
+	// do some cleanup
+	for ai, a := range schedule.Activities {
+		schedule.Activities[ai].Description = strings.TrimSpace(a.Description)
+	}
+	for ni, n := range notifications.Notifications {
+		notifications.Notifications[ni].Text = strings.TrimSpace(n.Text)
+	}
+
+	// check some basic assumptions
+	// - we depend on the fact that an activity is uniquely identified by its id and can only occur once per start time per day
+	// - we also depend on each activity having at least one category
+	activityInstancesCheck := map[string]fusiongo.ActivityInstance{}
+	for ai, a := range schedule.Activities {
+		iid := fmt.Sprint(a.ActivityID, a.Time.Date, a.Time.Start)
+		if x, ok := activityInstancesCheck[iid]; !ok {
+			activityInstancesCheck[iid] = a
+		} else if !reflect.DeepEqual(a, x) {
+			panic("wtf: activity instance is not uniquely identified by (id, date, start)")
 		}
-		sort.SliceStable(activityKeys, func(i, j int) bool {
-			if activityKeys[i].ActivityID == activityKeys[j].ActivityID {
-				return activityKeys[i].Time.Less(activityKeys[j].Time)
-			}
-			return activityKeys[i].ActivityID < activityKeys[j].ActivityID
+		if len(schedule.Categories[ai].Category) == 0 {
+			panic("wtf: expected activity instance to have at least one category")
+		}
+	}
+
+	type ActivityKey struct {
+		ActivityID string
+		Location   string
+		Time       fusiongo.TimeRange
+	}
+
+	type ActivityInstance struct {
+		IsCancelled bool
+		Activity    string
+		Description string
+		Date        fusiongo.Date
+		Categories  []string
+		CategoryIDs []string
+	}
+
+	// collect activity instance event info and group into recurrence groups
+	activities := map[ActivityKey][]ActivityInstance{}
+	for ai, a := range schedule.Activities {
+		activityKey := ActivityKey{
+			ActivityID: a.ActivityID,
+			Time:       a.Time.TimeRange,
+			Location:   a.Location,
+		}
+		activityInstance := ActivityInstance{
+			IsCancelled: a.IsCancelled,
+			Activity:    a.Activity,
+			Description: a.Description,
+			Date:        a.Time.Date,
+			Categories:  schedule.Categories[ai].Category,
+			CategoryIDs: schedule.Categories[ai].CategoryID,
+		}
+		activities[activityKey] = append(activities[activityKey], activityInstance)
+	}
+
+	// deterministically sort the map
+	activityKeys := make([]ActivityKey, 0, len(activities))
+	for activityKey, activityInstances := range activities {
+		sort.SliceStable(activityInstances, func(i, j int) bool {
+			return activityInstances[i].Date.Less(activityInstances[j].Date)
 		})
+		activityKeys = append(activityKeys, activityKey)
+	}
+	sort.SliceStable(activityKeys, func(i, j int) bool {
+		if activityKeys[i].ActivityID == activityKeys[j].ActivityID {
+			return activityKeys[i].Time.Less(activityKeys[j].Time)
+		}
+		return activityKeys[i].ActivityID < activityKeys[j].ActivityID
+	})
 
-		type ActivityBase struct {
-			Instance ActivityInstance
+	type ActivityBase struct {
+		Instance ActivityInstance
 
-			Recurrence map[time.Weekday]int
-			Last       fusiongo.Date
+		Recurrence map[time.Weekday]int
+		Last       fusiongo.Date
+	}
+
+	// heuristically determine the recurrence info
+	activityBase := make(map[ActivityKey]ActivityBase, len(activities))
+	for _, activityKey := range activityKeys {
+		activityInstances := activities[activityKey]
+
+		// if there's only one instance, no recurrence
+		if len(activityInstances) == 1 {
+			activityBase[activityKey] = ActivityBase{
+				Instance: activityInstances[0],
+			}
+			continue
 		}
 
-		// heuristically determine the recurrence info
-		activityBase := make(map[ActivityKey]ActivityBase, len(activities))
-		for _, activityKey := range activityKeys {
-			activityInstances := activities[activityKey]
+		base := ActivityBase{
+			Recurrence: map[time.Weekday]int{},
+		}
 
-			// if there's only one instance, no recurrence
-			if len(activityInstances) == 1 {
-				activityBase[activityKey] = ActivityBase{
-					Instance: activityInstances[0],
-				}
-				continue
-			}
+		// find the first and last occurrences (note: we sorted it earlier)
+		base.Instance.Date = activityInstances[0].Date
+		base.Last = activityInstances[len(activityInstances)-1].Date
 
-			base := ActivityBase{
-				Recurrence: map[time.Weekday]int{},
-			}
+		// figure out the recurrence pattern
+		for _, activityInstance := range activityInstances {
+			base.Recurrence[time.Weekday(activityInstance.Date.In(tz).Weekday())]++
+		}
 
-			// find the first and last occurrences (note: we sorted it earlier)
-			base.Instance.Date = activityInstances[0].Date
-			base.Last = activityInstances[len(activityInstances)-1].Date
-
-			// figure out the recurrence pattern
+		// find the first most common name
+		{
+			names := []string{}
+			nameCounts := map[string]int{}
+			nameCount := 0
 			for _, activityInstance := range activityInstances {
-				base.Recurrence[time.Weekday(activityInstance.Date.In(tz).Weekday())]++
-			}
-
-			// find the first most common name
-			{
-				names := []string{}
-				nameCounts := map[string]int{}
-				nameCount := 0
-				for _, activityInstance := range activityInstances {
-					if _, seen := nameCounts[activityInstance.Name]; !seen {
-						names = append(names, activityInstance.Name)
-					}
-					nameCounts[activityInstance.Name]++
+				if _, seen := nameCounts[activityInstance.Activity]; !seen {
+					names = append(names, activityInstance.Activity)
 				}
-				for _, name := range names {
-					if n := nameCounts[name]; n > nameCount {
-						nameCount = n
-						base.Instance.Name = name
-					}
+				nameCounts[activityInstance.Activity]++
+			}
+			for _, name := range names {
+				if n := nameCounts[name]; n > nameCount {
+					nameCount = n
+					base.Instance.Activity = name
 				}
 			}
-
-			// keep the description if all are the same
-			base.Instance.Name = activityInstances[0].Name
-			base.Instance.Description = activityInstances[0].Description
-
-			activityBase[activityKey] = base
 		}
 
-		// get calendar boundaries
-		var calStart, calEnd time.Time
-		for _, a := range schedule.Activities {
-			aStart, aEnd := a.Time.In(tz)
-			if calStart.IsZero() || aStart.Before(calStart) {
-				calStart = aStart
-			}
-			if calEnd.IsZero() || aEnd.After(calEnd) {
-				calStart = aEnd
-			}
-		}
-		if calStart.IsZero() {
-			calStart = time.Now().In(tz)
-		}
-		if calEnd.IsZero() {
-			calEnd = time.Now().In(tz)
-		}
+		// keep the description if all are the same
+		base.Instance.Activity = activityInstances[0].Activity
+		base.Instance.Description = activityInstances[0].Description
 
+		activityBase[activityKey] = base
+	}
+
+	// get calendar boundaries
+	var calStart, calEnd time.Time
+	for _, a := range schedule.Activities {
+		aStart, aEnd := a.Time.In(tz)
+		if calStart.IsZero() || aStart.Before(calStart) {
+			calStart = aStart
+		}
+		if calEnd.IsZero() || aEnd.After(calEnd) {
+			calStart = aEnd
+		}
+	}
+	if calStart.IsZero() {
+		calStart = time.Now().In(tz)
+	}
+	if calEnd.IsZero() {
+		calEnd = time.Now().In(tz)
+	}
+
+	return func(o *generateCalendarOptions) []byte {
 		// compute excluded activity keys
 		activityKeyExcludes := map[ActivityKey]bool{}
 		for _, activityKey := range activityKeys {
-			if !f_location.Match(activityKey.Location) {
+			if !o.Location.Match(activityKey.Location) {
 				// location doesn't match
 				activityKeyExcludes[activityKey] = true
 				continue
 			}
 			if !slices.ContainsFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
-				if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
+				if !o.Activity.Match(activityInstance.Activity) || !o.ActivityID.Match(activityKey.ActivityID) {
 					return false
 				}
-				if !slices.ContainsFunc(activityInstance.Categories, f_category.Match) {
+				if !slices.ContainsFunc(activityInstance.Categories, o.Category.Match) {
 					return false
 				}
-				if !slices.ContainsFunc(activityInstance.CategoryIDs, f_category_id.Match) {
+				if !slices.ContainsFunc(activityInstance.CategoryIDs, o.CategoryID.Match) {
 					return false
 				}
 				return true
@@ -466,6 +489,8 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			";", "\\;",
 			",", "\\,",
 		)
+
+		var ical bytes.Buffer
 		fmt.Fprintf(&ical, "BEGIN:VCALENDAR\r\n")
 		fmt.Fprintf(&ical, "VERSION:2.0\r\n")
 		fmt.Fprintf(&ical, "PRODID:arcical\r\n")
@@ -544,7 +569,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
 			fmt.Fprintf(&ical, "UID:%s\r\n", uid)
 			fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
-			fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(base.Instance.Name))
+			fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(base.Instance.Activity))
 			fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
 			fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(base.Instance.Description))
 			fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.Time.WithDate(base.Instance.Date).StartIn(tz).Format("20060102T150405")) // local
@@ -557,16 +582,16 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 							if activityInstance.Date != (fusiongo.Date{Year: dy, Month: dm, Day: dd}) {
 								return false
 							}
-							if activityInstance.IsCancelled && o_exclude_cancelled {
+							if activityInstance.IsCancelled && o.DeleteCancelled {
 								return false
 							}
-							if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
+							if !o.Activity.Match(activityInstance.Activity) || !o.ActivityID.Match(activityKey.ActivityID) {
 								return false
 							}
-							if !slices.ContainsFunc(activityInstance.Categories, f_category.Match) {
+							if !slices.ContainsFunc(activityInstance.Categories, o.Category.Match) {
 								return false
 							}
-							if !slices.ContainsFunc(activityInstance.CategoryIDs, f_category_id.Match) {
+							if !slices.ContainsFunc(activityInstance.CategoryIDs, o.Category.Match) {
 								return false
 							}
 							return true
@@ -581,17 +606,17 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 			// write recurrence exceptions
 			if base.Recurrence != nil {
 				for _, activityInstance := range activities[activityKey] {
-					if activityInstance.IsCancelled && o_exclude_cancelled {
+					if activityInstance.IsCancelled && o.DeleteCancelled {
 						continue
 					}
-					if activityInstance.Name != base.Instance.Name || activityInstance.Description != base.Instance.Description || activityInstance.IsCancelled {
-						if !f_activity.Match(activityInstance.Name) || !f_activity_id.Match(activityKey.ActivityID) {
+					if activityInstance.Activity != base.Instance.Activity || activityInstance.Description != base.Instance.Description || activityInstance.IsCancelled {
+						if !o.Activity.Match(activityInstance.Activity) || !o.ActivityID.Match(activityKey.ActivityID) {
 							continue
 						}
-						if !slices.ContainsFunc(activityInstance.Categories, f_category.Match) {
+						if !slices.ContainsFunc(activityInstance.Categories, o.Category.Match) {
 							continue
 						}
-						if !slices.ContainsFunc(activityInstance.CategoryIDs, f_category_id.Match) {
+						if !slices.ContainsFunc(activityInstance.CategoryIDs, o.CategoryID.Match) {
 							continue
 						}
 						fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
@@ -599,10 +624,10 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 						fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z"))       // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
 						fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc
 						if !activityInstance.IsCancelled {
-							fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(activityInstance.Name))
+							fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(activityInstance.Activity))
 						} else {
-							fmt.Fprintf(&ical, "SUMMARY:CANCELLED - %s\r\n", icalTextEscape.Replace(activityInstance.Name))
-							if !o_fake_cancelled {
+							fmt.Fprintf(&ical, "SUMMARY:CANCELLED - %s\r\n", icalTextEscape.Replace(activityInstance.Activity))
+							if !o.FakeCancelled {
 								fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
 							}
 						}
@@ -618,7 +643,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 				}
 			}
 		}
-		if !o_no_notifications {
+		if !o.NoNotifications {
 			// add notifications as all-day events for the current day
 			for _, n := range notifications.Notifications {
 				// https://stackoverflow.com/questions/1716237/single-day-all-day-appointments-in-ics-files
@@ -639,17 +664,8 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		}
 		fmt.Fprintf(&ical, "END:VCALENDAR\r\n")
 
-		return nil
-	}(); err != nil {
-		slog.Error("failed to generate calendar", "error", err, "instance", schoolID)
-		http.Error(w, fmt.Sprintf("Failed to generate calendar: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	w.Header().Set("Content-Length", strconv.Itoa(ical.Len()))
-	w.WriteHeader(http.StatusOK)
-	ical.WriteTo(w)
+		return ical.Bytes()
+	}, nil
 }
 
 type filterer struct {

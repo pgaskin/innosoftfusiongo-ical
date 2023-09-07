@@ -63,7 +63,7 @@
     <script>
         const url = new URL(window.location.href)
         url.hash = ""
-        url.pathname = url.pathname.replace(/\.html$/, ".ics")
+        url.pathname = url.pathname.replace(/\.html$/, "") + ".ics"
 
         const errbar = document.getElementById("errbar")
 

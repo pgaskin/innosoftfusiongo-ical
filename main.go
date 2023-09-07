@@ -136,50 +136,74 @@ func main() {
 func handle(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimLeft(path.Clean(r.URL.Path), "/")
 
-	// /{instance}.ics -> handleCalendar
 	if !strings.ContainsRune(p, '/') {
-		if instance, ext, ok := strings.Cut(p, "."); ok {
-			if instance, _ := strings.CutPrefix(instance, "school"); instance != "" {
-				if schoolID, _ := strconv.ParseInt(instance, 10, 64); schoolID != 0 {
-					if whitelist := *InstanceWhitelist; whitelist != "" {
-						var (
-							match           bool
-							more            bool
-							instanceCurrent string
-							instanceShort   = strconv.FormatInt(schoolID, 10)
-							instanceLong    = "school" + instanceShort
-						)
-						for {
-							instanceCurrent, whitelist, more = strings.Cut(whitelist, ",")
-							instanceCurrent = strings.TrimSpace(instanceCurrent)
-							if instanceCurrent == instanceShort || instanceCurrent == instanceLong {
-								match = true
-								break
-							}
-							if !more {
-								break
-							}
+		instance, ext, _ := strings.Cut(p, ".")
+		if instance, _ := strings.CutPrefix(instance, "school"); instance != "" {
+			if schoolID, _ := strconv.ParseInt(instance, 10, 64); schoolID != 0 {
+				if whitelist := *InstanceWhitelist; whitelist != "" {
+					var (
+						match           bool
+						more            bool
+						instanceCurrent string
+						instanceShort   = strconv.FormatInt(schoolID, 10)
+						instanceLong    = "school" + instanceShort
+					)
+					for {
+						instanceCurrent, whitelist, more = strings.Cut(whitelist, ",")
+						instanceCurrent = strings.TrimSpace(instanceCurrent)
+						if instanceCurrent == instanceShort || instanceCurrent == instanceLong {
+							match = true
+							break
 						}
-						if !match {
-							http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
-							return
+						if !more {
+							break
 						}
 					}
-					switch strings.ToLower(ext) {
-					case "html":
-						handleWeb(w, r, int(schoolID))
-						return
-					case "ics":
-						handleCalendar(w, r, int(schoolID))
+					if !match {
+						http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
 						return
 					}
-					http.Error(w, fmt.Sprintf("No handler for extension %q", ext), http.StatusNotFound)
+				}
+				if ext == "" {
+					if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "Google-Calendar-Importer") || strings.HasPrefix(ua, "Microsoft.Exchange/") {
+						ext = "ics"
+					}
+					if ext == "" {
+					accept:
+						for _, x := range strings.Split(r.Header.Get("Accept"), ",") {
+							if m, _, _ := strings.Cut(strings.TrimSpace(x), ";"); m != "" {
+								switch strings.ToLower(m) {
+								case "text/calendar":
+									ext = "ics"
+									break accept
+								case "text/html", "application/xhtml+xml":
+									ext = "html"
+									break accept
+								}
+							}
+						}
+					}
+					if r.Header.Get("Sec-Fetch-Dest") == "document" {
+						ext = "html"
+					}
+					if ext == "" {
+						ext = "html"
+					}
+				}
+				switch strings.ToLower(ext) {
+				case "html":
+					handleWeb(w, r, int(schoolID))
+					return
+				case "ics":
+					handleCalendar(w, r, int(schoolID))
 					return
 				}
+				http.Error(w, fmt.Sprintf("No handler for extension %q", ext), http.StatusNotFound)
+				return
 			}
-			http.Error(w, fmt.Sprintf("Invalid instance %q", instance), http.StatusBadRequest)
-			return
 		}
+		http.Error(w, fmt.Sprintf("Invalid instance %q", instance), http.StatusBadRequest)
+		return
 	}
 
 	http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)

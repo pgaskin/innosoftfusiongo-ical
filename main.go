@@ -365,15 +365,15 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 	}
 
 	// check some basic assumptions
-	// - we depend on the fact that an activity is uniquely identified by its id and location and can only occur once per start time per day
-	// - we also depend on each activity having at least one category
+	// - we depend (for correctness, not code) on the fact that an activity is uniquely identified by its id and location and can only occur once per start time per day
+	// - we also depend on each activity having at least one category (this should always be true)
 	activityInstancesCheck := map[string]fusiongo.ActivityInstance{}
 	for ai, a := range schedule.Activities {
 		iid := fmt.Sprint(a.ActivityID, a.Location, a.Time.Date, a.Time.Start)
 		if x, ok := activityInstancesCheck[iid]; !ok {
 			activityInstancesCheck[iid] = a
 		} else if !reflect.DeepEqual(a, x) {
-			panic("wtf: activity instance is not uniquely identified by (id, location, date, start)")
+			slog.Warn("activity instance is not uniquely identified by (id, location, date, start)", "activity1", a, "activity2", x)
 		}
 		if len(schedule.Categories[ai].Category) == 0 {
 			panic("wtf: expected activity instance to have at least one category")

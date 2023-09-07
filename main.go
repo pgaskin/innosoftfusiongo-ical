@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -138,6 +139,7 @@ func handle(w http.ResponseWriter, r *http.Request) {
 
 	if !strings.ContainsRune(p, '/') {
 		instance, ext, _ := strings.Cut(p, ".")
+		ext = strings.ToLower(ext)
 		if instance, _ := strings.CutPrefix(instance, "school"); instance != "" {
 			if schoolID, _ := strconv.ParseInt(instance, 10, 64); schoolID != 0 {
 				if whitelist := *InstanceWhitelist; whitelist != "" {
@@ -164,33 +166,50 @@ func handle(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 				}
-				if ext == "" {
-					if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "Google-Calendar-Importer") || strings.HasPrefix(ua, "Microsoft.Exchange/") {
-						ext = "ics"
-					}
-					if ext == "" {
-					accept:
-						for _, x := range strings.Split(r.Header.Get("Accept"), ",") {
-							if m, _, _ := strings.Cut(strings.TrimSpace(x), ";"); m != "" {
-								switch strings.ToLower(m) {
-								case "text/calendar":
-									ext = "ics"
-									break accept
-								case "text/html", "application/xhtml+xml":
-									ext = "html"
-									break accept
-								}
-							}
-						}
-					}
-					if r.Header.Get("Sec-Fetch-Dest") == "document" {
-						ext = "html"
-					}
-					if ext == "" {
-						ext = "html"
+				if ext != "ics" {
+					if ua := r.Header.Get("User-Agent"); false ||
+						strings.HasPrefix(ua, "Google-Calendar-Importer") || // Google Calendar
+						strings.HasPrefix(ua, "Microsoft.Exchange/") || // OWA
+						strings.Contains(ua, "CalendarAgent/") || // macOS Calendar
+						strings.Contains(ua, "dataaccessd/") || // iOS Calendar
+						strings.HasPrefix(ua, "ICSx5/") || // ICSx5 Android
+						strings.HasPrefix(r.Header.Get("Accept"), "text/calendar") || // misc
+						false {
+						w.Header().Set("Cache-Control", "private, no-cache, no-store")
+						w.Header().Set("Pragma", "no-cache")
+						w.Header().Set("Expires", "0")
+						http.Redirect(w, r, (&url.URL{
+							Path:     "/" + strconv.FormatInt(schoolID, 10) + ".ics",
+							RawQuery: r.URL.RawQuery,
+						}).String(), http.StatusFound)
+						return
 					}
 				}
-				switch strings.ToLower(ext) {
+				if ext == "ics" {
+					if r.Header.Get("Sec-Fetch-Dest") == "document" {
+						w.Header().Set("Cache-Control", "private, no-cache, no-store")
+						w.Header().Set("Pragma", "no-cache")
+						w.Header().Set("Expires", "0")
+						http.Redirect(w, r, (&url.URL{
+							Path:     "/" + strconv.FormatInt(schoolID, 10) + ".html",
+							RawQuery: r.URL.RawQuery,
+						}).String(), http.StatusFound)
+						return
+					}
+				}
+				if ext == "" {
+					if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "Mozilla/") {
+						w.Header().Set("Cache-Control", "private, no-cache, no-store")
+						w.Header().Set("Pragma", "no-cache")
+						w.Header().Set("Expires", "0")
+						http.Redirect(w, r, (&url.URL{
+							Path:     "/" + strconv.FormatInt(schoolID, 10) + ".html",
+							RawQuery: r.URL.RawQuery,
+						}).String(), http.StatusFound)
+						return
+					}
+				}
+				switch ext {
 				case "html":
 					handleWeb(w, r, int(schoolID))
 					return

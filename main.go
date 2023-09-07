@@ -207,6 +207,15 @@ func handle(w http.ResponseWriter, r *http.Request) {
 								RawQuery: r.URL.RawQuery,
 							}).String(), http.StatusFound)
 							return
+						} else {
+							w.Header().Set("Cache-Control", "private, no-cache, no-store")
+							w.Header().Set("Pragma", "no-cache")
+							w.Header().Set("Expires", "0")
+							http.Redirect(w, r, (&url.URL{
+								Path:     "/" + strconv.FormatInt(schoolID, 10) + ".ics",
+								RawQuery: r.URL.RawQuery,
+							}).String(), http.StatusFound)
+							return
 						}
 					}
 					switch ext {

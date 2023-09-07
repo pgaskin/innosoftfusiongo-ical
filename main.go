@@ -137,92 +137,93 @@ func main() {
 func handle(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimLeft(path.Clean(r.URL.Path), "/")
 
-	if !strings.ContainsRune(p, '/') {
-		instance, ext, _ := strings.Cut(p, ".")
-		ext = strings.ToLower(ext)
-		if instance, _ := strings.CutPrefix(instance, "school"); instance != "" {
-			if schoolID, _ := strconv.ParseInt(instance, 10, 64); schoolID != 0 {
-				if whitelist := *InstanceWhitelist; whitelist != "" {
-					var (
-						match           bool
-						more            bool
-						instanceCurrent string
-						instanceShort   = strconv.FormatInt(schoolID, 10)
-						instanceLong    = "school" + instanceShort
-					)
-					for {
-						instanceCurrent, whitelist, more = strings.Cut(whitelist, ",")
-						instanceCurrent = strings.TrimSpace(instanceCurrent)
-						if instanceCurrent == instanceShort || instanceCurrent == instanceLong {
-							match = true
-							break
+	if !strings.ContainsRune(p, '/') && p != "favicon.ico" || !strings.HasPrefix(p, ".") {
+		if instance, ext, _ := strings.Cut(p, "."); instance != "" {
+			ext = strings.ToLower(ext)
+			if instance, _ := strings.CutPrefix(instance, "school"); instance != "" {
+				if schoolID, _ := strconv.ParseInt(instance, 10, 64); schoolID != 0 {
+					if whitelist := *InstanceWhitelist; whitelist != "" {
+						var (
+							match           bool
+							more            bool
+							instanceCurrent string
+							instanceShort   = strconv.FormatInt(schoolID, 10)
+							instanceLong    = "school" + instanceShort
+						)
+						for {
+							instanceCurrent, whitelist, more = strings.Cut(whitelist, ",")
+							instanceCurrent = strings.TrimSpace(instanceCurrent)
+							if instanceCurrent == instanceShort || instanceCurrent == instanceLong {
+								match = true
+								break
+							}
+							if !more {
+								break
+							}
 						}
-						if !more {
-							break
+						if !match {
+							http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
+							return
 						}
 					}
-					if !match {
-						http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
+					if ext != "ics" {
+						if ua := r.Header.Get("User-Agent"); false ||
+							strings.HasPrefix(ua, "Google-Calendar-Importer") || // Google Calendar
+							strings.HasPrefix(ua, "Microsoft.Exchange/") || // OWA
+							strings.Contains(ua, "CalendarAgent/") || // macOS Calendar
+							strings.Contains(ua, "dataaccessd/") || // iOS Calendar
+							strings.HasPrefix(ua, "ICSx5/") || // ICSx5 Android
+							strings.HasPrefix(r.Header.Get("Accept"), "text/calendar") || // misc
+							false {
+							w.Header().Set("Cache-Control", "private, no-cache, no-store")
+							w.Header().Set("Pragma", "no-cache")
+							w.Header().Set("Expires", "0")
+							http.Redirect(w, r, (&url.URL{
+								Path:     "/" + strconv.FormatInt(schoolID, 10) + ".ics",
+								RawQuery: r.URL.RawQuery,
+							}).String(), http.StatusFound)
+							return
+						}
+					}
+					if ext == "ics" {
+						if r.Header.Get("Sec-Fetch-Dest") == "document" {
+							w.Header().Set("Cache-Control", "private, no-cache, no-store")
+							w.Header().Set("Pragma", "no-cache")
+							w.Header().Set("Expires", "0")
+							http.Redirect(w, r, (&url.URL{
+								Path:     "/" + strconv.FormatInt(schoolID, 10) + ".html",
+								RawQuery: r.URL.RawQuery,
+							}).String(), http.StatusFound)
+							return
+						}
+					}
+					if ext == "" {
+						if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "Mozilla/") {
+							w.Header().Set("Cache-Control", "private, no-cache, no-store")
+							w.Header().Set("Pragma", "no-cache")
+							w.Header().Set("Expires", "0")
+							http.Redirect(w, r, (&url.URL{
+								Path:     "/" + strconv.FormatInt(schoolID, 10) + ".html",
+								RawQuery: r.URL.RawQuery,
+							}).String(), http.StatusFound)
+							return
+						}
+					}
+					switch ext {
+					case "html":
+						handleWeb(w, r, int(schoolID))
+						return
+					case "ics":
+						handleCalendar(w, r, int(schoolID))
 						return
 					}
-				}
-				if ext != "ics" {
-					if ua := r.Header.Get("User-Agent"); false ||
-						strings.HasPrefix(ua, "Google-Calendar-Importer") || // Google Calendar
-						strings.HasPrefix(ua, "Microsoft.Exchange/") || // OWA
-						strings.Contains(ua, "CalendarAgent/") || // macOS Calendar
-						strings.Contains(ua, "dataaccessd/") || // iOS Calendar
-						strings.HasPrefix(ua, "ICSx5/") || // ICSx5 Android
-						strings.HasPrefix(r.Header.Get("Accept"), "text/calendar") || // misc
-						false {
-						w.Header().Set("Cache-Control", "private, no-cache, no-store")
-						w.Header().Set("Pragma", "no-cache")
-						w.Header().Set("Expires", "0")
-						http.Redirect(w, r, (&url.URL{
-							Path:     "/" + strconv.FormatInt(schoolID, 10) + ".ics",
-							RawQuery: r.URL.RawQuery,
-						}).String(), http.StatusFound)
-						return
-					}
-				}
-				if ext == "ics" {
-					if r.Header.Get("Sec-Fetch-Dest") == "document" {
-						w.Header().Set("Cache-Control", "private, no-cache, no-store")
-						w.Header().Set("Pragma", "no-cache")
-						w.Header().Set("Expires", "0")
-						http.Redirect(w, r, (&url.URL{
-							Path:     "/" + strconv.FormatInt(schoolID, 10) + ".html",
-							RawQuery: r.URL.RawQuery,
-						}).String(), http.StatusFound)
-						return
-					}
-				}
-				if ext == "" {
-					if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "Mozilla/") {
-						w.Header().Set("Cache-Control", "private, no-cache, no-store")
-						w.Header().Set("Pragma", "no-cache")
-						w.Header().Set("Expires", "0")
-						http.Redirect(w, r, (&url.URL{
-							Path:     "/" + strconv.FormatInt(schoolID, 10) + ".html",
-							RawQuery: r.URL.RawQuery,
-						}).String(), http.StatusFound)
-						return
-					}
-				}
-				switch ext {
-				case "html":
-					handleWeb(w, r, int(schoolID))
-					return
-				case "ics":
-					handleCalendar(w, r, int(schoolID))
+					http.Error(w, fmt.Sprintf("No handler for extension %q", ext), http.StatusNotFound)
 					return
 				}
-				http.Error(w, fmt.Sprintf("No handler for extension %q", ext), http.StatusNotFound)
-				return
 			}
+			http.Error(w, fmt.Sprintf("Invalid instance %q", instance), http.StatusBadRequest)
+			return
 		}
-		http.Error(w, fmt.Sprintf("Invalid instance %q", instance), http.StatusBadRequest)
-		return
 	}
 
 	http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)

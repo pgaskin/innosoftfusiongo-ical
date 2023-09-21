@@ -104,6 +104,7 @@
                         domNodes.push(el)
                     }
                     const el = document.createElement("i")
+                    el.style.whiteSpace = "pre-wrap"
                     el.textContent = arg.event.extendedProps.description
                     domNodes.push(el)
                 }

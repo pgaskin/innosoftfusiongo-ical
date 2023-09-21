@@ -679,9 +679,9 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			if base.Recurrence != nil && o.DescribeRecurrence {
 				excDesc.WriteString("\n\n")
 				excDesc.WriteString("Repeats ")
-				excDesc.WriteString(activityKey.StartTime.String())
+				excDesc.WriteString(activityKey.StartTime.StringCompact())
 				excDesc.WriteString(" - ")
-				excDesc.WriteString(base.Instance.EndTime.String())
+				excDesc.WriteString(base.Instance.EndTime.StringCompact())
 				var hasDayExceptions bool
 				for x := time.Weekday(0); x < 7; x++ {
 					if base.Recurrence[x] == 0 {
@@ -699,7 +699,6 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 					}
 					excDesc.WriteString("]")
 				}
-				excDesc.WriteString("\n")
 				if base.Recurrence != nil {
 					for d := base.Instance.Date.In(tz); !base.Last.In(tz).Before(d); d = d.AddDate(0, 0, 1) {
 						if base.Recurrence[d.Weekday()] > 0 {
@@ -708,29 +707,38 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 							i := slices.IndexFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
 								return activityInstance.Date == df
 							})
-							if i == -1 {
-								excDesc.WriteString(" • not on ")
-								excDesc.WriteString(df.In(tz).Format("Mon Jan 02"))
-								excDesc.WriteString("\n")
-								continue
-							}
-							activityInstance := activities[activityKey][i]
 
+							var hasDiff bool
+							var diff string
 							var diffs []string
-							if activityInstance.Activity != base.Instance.Activity {
-								diffs = append(diffs, "name="+strconv.Quote(activityInstance.Activity))
+							if i == -1 {
+								diff = "not"
+								hasDiff = true
+							} else {
+								activityInstance := activities[activityKey][i]
+								switch {
+								case activityInstance.IsCancelled:
+									diff = "cancelled"
+									hasDiff = true
+								case activityInstance.EndTime != base.Instance.EndTime:
+									diff = "ends at " + activityInstance.EndTime.StringCompact()
+									hasDiff = true
+								default:
+									diff = "differs"
+								}
+								if activityInstance.Activity != base.Instance.Activity {
+									diffs = append(diffs, "name="+strconv.Quote(activityInstance.Activity))
+									hasDiff = true
+								}
+								if activityInstance.Description != base.Instance.Description {
+									diffs = append(diffs, "description="+strconv.Quote(activityInstance.Description))
+									hasDiff = true
+								}
 							}
-							if activityInstance.Description != base.Instance.Description {
-								diffs = append(diffs, "description")
-							}
-							if activityInstance.EndTime != base.Instance.EndTime {
-								diffs = append(diffs, "end="+activityInstance.EndTime.String())
-							}
-							if activityInstance.IsCancelled {
-								diffs = append(diffs, "cancelled")
-							}
-							if len(diffs) != 0 {
-								excDesc.WriteString(" • exception on ")
+							if hasDiff {
+								excDesc.WriteString("\n • ")
+								excDesc.WriteString(diff)
+								excDesc.WriteString(" on ")
 								excDesc.WriteString(df.In(tz).Format("Mon Jan 02"))
 								for i, x := range diffs {
 									if i == 0 {
@@ -740,7 +748,6 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 									}
 									excDesc.WriteString(x)
 								}
-								excDesc.WriteString("\n")
 							}
 						}
 					}

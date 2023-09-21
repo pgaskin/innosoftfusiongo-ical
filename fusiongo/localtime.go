@@ -16,6 +16,10 @@ func (v DateTimeRange) String() string {
 	return v.Date.String() + " " + v.TimeRange.String()
 }
 
+func (v DateTimeRange) StringCompact() string {
+	return v.Date.String() + " " + v.TimeRange.StringCompact()
+}
+
 func (v DateTimeRange) In(loc *time.Location) (start, end time.Time) {
 	start = v.Start.WithDate(v.Date).In(loc)
 	end = v.End.WithDate(v.Date).In(loc)
@@ -51,6 +55,10 @@ type TimeRange struct {
 
 func (v TimeRange) String() string {
 	return v.Start.String() + " - " + v.End.String()
+}
+
+func (v TimeRange) StringCompact() string {
+	return v.Start.StringCompact() + " - " + v.End.StringCompact()
 }
 
 func (v TimeRange) WithDate(d Date) DateTimeRange {
@@ -181,6 +189,13 @@ func ParseTime(s string) (time Time, ok bool) {
 }
 
 func (v Time) String() string {
+	return fmt.Sprintf("%02d:%02d:%02d", v.Hour, v.Minute, v.Second)
+}
+
+func (v Time) StringCompact() string {
+	if v.Second == 0 {
+		return fmt.Sprintf("%02d:%02d", v.Hour, v.Minute)
+	}
 	return fmt.Sprintf("%02d:%02d:%02d", v.Hour, v.Minute, v.Second)
 }
 

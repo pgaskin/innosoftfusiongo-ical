@@ -361,7 +361,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 	type ActivityKey struct {
 		ActivityID string
 		Location   string
-		Time       fusiongo.TimeRange
+		StartTime  fusiongo.Time
 	}
 
 	type ActivityInstance struct {
@@ -369,6 +369,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		Activity    string
 		Description string
 		Date        fusiongo.Date
+		EndTime     fusiongo.Time
 		Categories  []string
 		CategoryIDs []string
 	}
@@ -378,7 +379,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 	for ai, a := range schedule.Activities {
 		activityKey := ActivityKey{
 			ActivityID: a.ActivityID,
-			Time:       a.Time.TimeRange,
+			StartTime:  a.Time.Start,
 			Location:   a.Location,
 		}
 		activityInstance := ActivityInstance{
@@ -386,6 +387,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			Activity:    a.Activity,
 			Description: a.Description,
 			Date:        a.Time.Date,
+			EndTime:     a.Time.End,
 			Categories:  schedule.Categories[ai].Category,
 			CategoryIDs: schedule.Categories[ai].CategoryID,
 		}
@@ -402,7 +404,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 	}
 	sort.SliceStable(activityKeys, func(i, j int) bool {
 		if activityKeys[i].ActivityID == activityKeys[j].ActivityID {
-			return activityKeys[i].Time.Less(activityKeys[j].Time)
+			return activityKeys[i].StartTime.Less(activityKeys[j].StartTime)
 		}
 		return activityKeys[i].ActivityID < activityKeys[j].ActivityID
 	})
@@ -455,6 +457,25 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				if n := nameCounts[name]; n > nameCount {
 					nameCount = n
 					base.Instance.Activity = name
+				}
+			}
+		}
+
+		// find the most common end time
+		{
+			ends := []fusiongo.Time{}
+			endCounts := map[fusiongo.Time]int{}
+			endCount := 0
+			for _, activityInstance := range activityInstances {
+				if _, seen := endCounts[activityInstance.EndTime]; !seen {
+					ends = append(ends, activityInstance.EndTime)
+				}
+				endCounts[activityInstance.EndTime]++
+			}
+			for _, end := range ends {
+				if n := endCounts[end]; n > endCount {
+					endCount = n
+					base.Instance.EndTime = end
 				}
 			}
 		}
@@ -560,10 +581,9 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 
 			// generate a uid from all fields of activityKey
 			uid := fmt.Sprintf(
-				"%s-%x-%02d%02d%02d-%02d%02d%02d@school%d.innosoftfusiongo.com",
+				"%s-%x-%02d%02d%02d@school%d.innosoftfusiongo.com",
 				activityKey.ActivityID, sha1.Sum([]byte(activityKey.Location)),
-				activityKey.Time.Start.Hour, activityKey.Time.Start.Minute, activityKey.Time.Start.Second,
-				activityKey.Time.End.Hour, activityKey.Time.End.Minute, activityKey.Time.End.Second,
+				activityKey.StartTime.Hour, activityKey.StartTime.Minute, activityKey.StartTime.Second,
 				schoolID,
 			)
 			if len(uid) >= 255 {
@@ -603,10 +623,10 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(base.Instance.Activity))
 			fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
 			fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(base.Instance.Description))
-			fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.Time.WithDate(base.Instance.Date).StartIn(tz).Format("20060102T150405")) // local
-			fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityKey.Time.WithDate(base.Instance.Date).EndIn(tz).Format("20060102T150405"))     // local
+			fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(base.Instance.Date).In(tz).Format("20060102T150405")) // local
+			fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, base.Instance.EndTime.WithDate(base.Instance.Date).In(tz).Format("20060102T150405"))   // local
 			if base.Recurrence != nil {
-				fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", activityKey.Time.End.WithDate(base.Last).In(tz).Format("20060102T150405"), strings.Join(byday, ",")) // local if dtstart is local, else utc
+				fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", base.Instance.EndTime.WithDate(base.Last).In(tz).Format("20060102T150405"), strings.Join(byday, ",")) // local if dtstart is local, else utc
 				for d := base.Instance.Date.In(tz); !base.Last.In(tz).Before(d); d = d.AddDate(0, 0, 1) {
 					if base.Recurrence[d.Weekday()] > 0 {
 						if dy, dm, dd := d.Date(); !slices.ContainsFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
@@ -627,7 +647,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 							}
 							return true
 						}) {
-							fmt.Fprintf(&ical, "EXDATE;TZID=%s:%s\r\n", tz, activityKey.Time.Start.WithDate(fusiongo.Date{Year: dy, Month: dm, Day: dd}).In(tz).Format("20060102T150405"))
+							fmt.Fprintf(&ical, "EXDATE;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(fusiongo.Date{Year: dy, Month: dm, Day: dd}).In(tz).Format("20060102T150405"))
 						}
 					}
 				}
@@ -640,7 +660,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 					if activityInstance.IsCancelled && o.DeleteCancelled {
 						continue
 					}
-					if activityInstance.Activity != base.Instance.Activity || activityInstance.Description != base.Instance.Description || activityInstance.IsCancelled {
+					if activityInstance.Activity != base.Instance.Activity || activityInstance.Description != base.Instance.Description || activityInstance.EndTime != base.Instance.EndTime || activityInstance.IsCancelled {
 						if !o.Activity.Match(activityInstance.Activity) || !o.ActivityID.Match(activityKey.ActivityID) {
 							continue
 						}
@@ -664,10 +684,10 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 						}
 						fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
 						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(activityInstance.Description))
-						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.Time.Start.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
-						fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityKey.Time.End.WithDate(activityInstance.Date).In(tz).Format("20060102T150405"))     // local
+						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(activityInstance.Date).In(tz).Format("20060102T150405"))  // local
+						fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityInstance.EndTime.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
 						if base.Recurrence != nil {
-							fmt.Fprintf(&ical, "RECURRENCE-ID;TZID=%s:%s\r\n", tz, activityKey.Time.Start.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
+							fmt.Fprintf(&ical, "RECURRENCE-ID;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
 						}
 						fmt.Fprintf(&ical, "END:VEVENT\r\n")
 					}

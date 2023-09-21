@@ -470,21 +470,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		if activityKeys[i].ActivityID == activityKeys[j].ActivityID {
 			if activityKeys[i].StartTime == activityKeys[j].StartTime {
 				if activityKeys[i].Location == activityKeys[j].Location {
-					var ac, bc int
-					for wi := range activityKeys[i].Weekday {
-						a := activityKeys[i].Weekday[wi]
-						b := activityKeys[j].Weekday[wi]
-						if a {
-							ac++
-						}
-						if b {
-							bc++
-						}
-						if !a && b {
-							return true
-						}
-					}
-					return ac < bc
+					return fmt.Sprint(activityKeys[i].Weekday) < fmt.Sprint(activityKeys[j].Weekday) // HACK
 				}
 				return activityKeys[i].Location < activityKeys[j].Location
 			}

@@ -185,37 +185,11 @@ func handle(w http.ResponseWriter, r *http.Request) {
 							return
 						}
 					}
-					if ext == "ics" {
-						if r.Header.Get("Sec-Fetch-Dest") == "document" {
-							w.Header().Set("Cache-Control", "private, no-cache, no-store")
-							w.Header().Set("Pragma", "no-cache")
-							w.Header().Set("Expires", "0")
-							http.Redirect(w, r, (&url.URL{
-								Path:     "/" + strconv.FormatInt(schoolID, 10) + ".html",
-								RawQuery: r.URL.RawQuery,
-							}).String(), http.StatusFound)
-							return
-						}
-					}
 					if ext == "" {
-						if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "Mozilla/") {
-							w.Header().Set("Cache-Control", "private, no-cache, no-store")
-							w.Header().Set("Pragma", "no-cache")
-							w.Header().Set("Expires", "0")
-							http.Redirect(w, r, (&url.URL{
-								Path:     "/" + strconv.FormatInt(schoolID, 10) + ".html",
-								RawQuery: r.URL.RawQuery,
-							}).String(), http.StatusFound)
-							return
+						if r.Header.Get("Sec-Fetch-Dest") == "document" || strings.HasPrefix(r.Header.Get("User-Agent"), "Mozilla/") {
+							ext = "html"
 						} else {
-							w.Header().Set("Cache-Control", "private, no-cache, no-store")
-							w.Header().Set("Pragma", "no-cache")
-							w.Header().Set("Expires", "0")
-							http.Redirect(w, r, (&url.URL{
-								Path:     "/" + strconv.FormatInt(schoolID, 10) + ".ics",
-								RawQuery: r.URL.RawQuery,
-							}).String(), http.StatusFound)
-							return
+							ext = "ics"
 						}
 					}
 					switch ext {
@@ -312,7 +286,11 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	}
 
 	buf := generateCalendar(&opt)
-	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+	if r.Header.Get("Sec-Fetch-Dest") != "document" {
+		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(buf)

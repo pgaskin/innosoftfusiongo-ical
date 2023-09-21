@@ -447,42 +447,14 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		}
 
 		// find the first most common name
-		{
-			names := []string{}
-			nameCounts := map[string]int{}
-			nameCount := 0
-			for _, activityInstance := range activityInstances {
-				if _, seen := nameCounts[activityInstance.Activity]; !seen {
-					names = append(names, activityInstance.Activity)
-				}
-				nameCounts[activityInstance.Activity]++
-			}
-			for _, name := range names {
-				if n := nameCounts[name]; n > nameCount {
-					nameCount = n
-					base.Instance.Activity = name
-				}
-			}
-		}
+		base.Instance.Activity, _ = mostCommonFunc(activityInstances, func(activityInstance ActivityInstance) string {
+			return activityInstance.Activity
+		})
 
 		// find the most common end time
-		{
-			ends := []fusiongo.Time{}
-			endCounts := map[fusiongo.Time]int{}
-			endCount := 0
-			for _, activityInstance := range activityInstances {
-				if _, seen := endCounts[activityInstance.EndTime]; !seen {
-					ends = append(ends, activityInstance.EndTime)
-				}
-				endCounts[activityInstance.EndTime]++
-			}
-			for _, end := range ends {
-				if n := endCounts[end]; n > endCount {
-					endCount = n
-					base.Instance.EndTime = end
-				}
-			}
-		}
+		base.Instance.EndTime, _ = mostCommonFunc(activityInstances, func(activityInstance ActivityInstance) fusiongo.Time {
+			return activityInstance.EndTime
+		})
 
 		// keep the description if all are the same
 		base.Instance.Activity = activityInstances[0].Activity
@@ -876,4 +848,38 @@ func (f *filterer) Match(s string) bool {
 		}
 	}
 	return match
+}
+
+func mostCommon[T comparable](xs []T) (common T, exceptions int) {
+	var (
+		els      []T
+		elCounts = map[T]int{}
+	)
+	for _, x := range xs {
+		if _, seen := elCounts[x]; !seen {
+			els = append(els, x)
+		}
+		elCounts[x]++
+	}
+	var elCount int
+	for _, el := range els {
+		if n := elCounts[el]; n > elCount {
+			common = el
+			elCount = n
+		}
+	}
+	for _, x := range xs {
+		if x != common {
+			exceptions++
+		}
+	}
+	return
+}
+
+func mostCommonFunc[T comparable, V any](vs []V, fn func(V) T) (common T, exceptions int) {
+	var xs []T
+	for _, v := range vs {
+		xs = append(xs, fn(v))
+	}
+	return mostCommon(xs)
 }

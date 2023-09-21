@@ -366,6 +366,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		ActivityID string
 		Location   string
 		StartTime  fusiongo.Time
+		Weekday    [7]bool
 	}
 
 	type ActivityInstance struct {
@@ -398,6 +399,65 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		activities[activityKey] = append(activities[activityKey], activityInstance)
 	}
 
+	// split out days which consistently have different end times
+	{
+		activitiesNew := map[ActivityKey][]ActivityInstance{}
+		for activityKey, activityInstances := range activities {
+
+			// group the activities by their weekday
+			var actByWeekday [7][]ActivityInstance
+			for _, activityInstance := range activityInstances {
+				wd := activityInstance.Date.WithTime(activityKey.StartTime).In(tz).Weekday()
+				actByWeekday[wd] = append(actByWeekday[wd], activityInstance)
+			}
+
+			// get the most common end time for each weekday
+			var etByWeekday [7]fusiongo.Time
+			for wd, acts := range actByWeekday {
+				if len(acts) != 0 {
+					etByWeekday[wd], _ = mostCommonFunc(acts, func(activityInstance ActivityInstance) fusiongo.Time {
+						return activityInstance.EndTime
+					})
+				}
+			}
+
+			// get the weekdays for each most common end time
+			etWeekdays := map[fusiongo.Time][7]bool{}
+			for wd, et := range etByWeekday {
+				if len(actByWeekday[wd]) != 0 {
+					x := etWeekdays[et]
+					x[wd] = true
+					etWeekdays[et] = x
+				}
+			}
+
+			// sanity check
+			var seenWeekdays [7]bool
+			for _, wds := range etWeekdays {
+				for wd, b := range wds {
+					if b {
+						if seenWeekdays[wd] {
+							panic("wtf: already used weekday " + time.Weekday(wd).String() + " for another end time") // should be impossible given the code above
+						}
+						seenWeekdays[wd] = true
+					}
+				}
+			}
+
+			// re-group the activities including the weekday split
+			for _, wds := range etWeekdays {
+				activityKeyNew := activityKey
+				activityKeyNew.Weekday = wds
+				for wd, b := range wds {
+					if b {
+						activitiesNew[activityKeyNew] = append(activitiesNew[activityKeyNew], actByWeekday[wd]...)
+					}
+				}
+			}
+		}
+		activities = activitiesNew
+	}
+
 	// deterministically sort the map
 	activityKeys := make([]ActivityKey, 0, len(activities))
 	for activityKey, activityInstances := range activities {
@@ -408,6 +468,26 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 	}
 	sort.SliceStable(activityKeys, func(i, j int) bool {
 		if activityKeys[i].ActivityID == activityKeys[j].ActivityID {
+			if activityKeys[i].StartTime == activityKeys[j].StartTime {
+				if activityKeys[i].Location == activityKeys[j].Location {
+					var ac, bc int
+					for wi := range activityKeys[i].Weekday {
+						a := activityKeys[i].Weekday[wi]
+						b := activityKeys[j].Weekday[wi]
+						if a {
+							ac++
+						}
+						if b {
+							bc++
+						}
+						if !a && b {
+							return true
+						}
+					}
+					return ac < bc
+				}
+				return activityKeys[i].Location < activityKeys[j].Location
+			}
 			return activityKeys[i].StartTime.Less(activityKeys[j].StartTime)
 		}
 		return activityKeys[i].ActivityID < activityKeys[j].ActivityID
@@ -556,9 +636,17 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			// https://www.nylas.com/blog/calendar-events-rrules/
 
 			// generate a uid from all fields of activityKey
+			var uidWd string
+			for w, c := range activityKey.Weekday {
+				if c {
+					uidWd += strings.ToUpper(time.Weekday(w).String()[:2])
+					uidWd += "-"
+				}
+			}
 			uid := fmt.Sprintf(
-				"%s-%x-%02d%02d%02d@school%d.innosoftfusiongo.com",
+				"%s-%x-%s%02d%02d%02d@school%d.innosoftfusiongo.com",
 				activityKey.ActivityID, sha1.Sum([]byte(activityKey.Location)),
+				uidWd,
 				activityKey.StartTime.Hour, activityKey.StartTime.Minute, activityKey.StartTime.Second,
 				schoolID,
 			)

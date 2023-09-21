@@ -15,45 +15,161 @@
             font-size: 1rem;
             font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
         }
-        html, body, main {
+        html, body, #app {
             height: 100%;
             padding: 0;
             margin: 0;
             overflow: hidden;
         }
-        main {
+        #app {
+            display: grid;
+            grid-template-rows: min-content 1fr;
+            grid-template-columns: 360px minmax(360px, 2fr);
+            grid-template-areas: "nav nav" "opts calendar";
+            overflow-x: auto;
+            font-size: .875em;
+        }
+        #app > #nav {
             display: flex;
-            flex-direction: column;
-            padding: 1rem;
-            gap: 1rem;
+            align-items: center;
+            grid-area: nav;
+            background: rgba(0, 0, 0, 0.08);
+            padding: .5em;
+            gap: .5em;
         }
-        main #query {
-            flex: 0 0 auto;
+        #app > #nav > #query {
             min-width: 0;
-            padding: .5rem;
+            flex: 1;
+            padding: .25em;
             font-size: inherit;
-            border: 1px solid #000;
-            background: transparent;
-            color: inherit;
+            border: 1px solid #999;
+            background: #fff;
+            color: #000;
         }
-        main #errbar {
+        #app > #opts {
+            grid-area: opts;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 0 .5em;
+            background: #fff;
+        }
+        #app > #opts > .opt {
+            border: 1px solid #ccc;
+            background: rgba(0, 0, 0, 0.02);
+            margin: .5em 0;
+        }
+        #app > #opts > .opt .opt__doc {
+            font-size: 0.75em;
+        }
+        #app > #opts > .opt.opt--flag label {
+            display: grid;
+            grid-template-columns: min-content 1fr;
+            grid-template-rows: min-content 1fr;
+            grid-template-areas: "cb name" ". doc";
+            padding: .5em;
+            gap: .5em;
+            align-items: center;
+        }
+        #app > #opts > .opt.opt--flag label:hover {
+            background: rgba(0, 0, 0, 0.05);
+        }
+        #app > #opts > .opt.opt--flag .opt__cb {
+            grid-area: cb;
+        }
+        #app > #opts > .opt.opt--flag .opt__name {
+            grid-area: name;
+        }
+        #app > #opts > .opt.opt--flag .opt__doc {
+            grid-area: doc;
+        }
+        #app > #opts > .opt.opt--filter {
+            display: block;
+            padding: .5em;
+        }
+        #app > #opts > .opt.opt--filter .opt__name {
+            display: block;
+        }
+        #app > #opts > .opt.opt--filter .opt__doc {
+            margin-top: .25em;
+        }
+        #app > #opts > .opt.opt--filter .opt__item {
+            display: flex;
+            align-items: stretch;
+            gap: .25em;
+            margin-top: .25em;
+        }
+        #app > #opts > .opt.opt--filter .opt__item > input {
+            min-width: 0;
+            flex: 1;
+            font-size: inherit;
+            border: 1px solid #999;
+            background: #fff;
+            color: #000;
+        }
+        #app > #opts > .opt.opt--filter .opt__item > input:disabled {
+            background: rgba(0, 0, 0, 0.05);
+            border-color: transparent;
+            color: #666;
+        }
+        #app > #opts > .opt.opt--filter .opt__item > button {
+            display: flex;
             flex: 0 0 auto;
-            padding: .5rem;
+        }
+        #app > #calendar {
+            grid-area: calendar;
+            padding: .5em;
+        }
+        #app > #calendar > #error {
+            padding: .5em;
+            margin-bottom: .5em;
             border: 1px solid rgba(128, 0, 0, 0.5);
             background: rgba(128, 0, 0, 0.2);
         }
-        main #calendar {
-            flex: 1;
-            font-size: 0.75em;
+
+        #app > #nav > #btn_opts {
+            display: none;
+        }
+        @media screen and (max-width: 720px) {
+            #app {
+                grid-template-rows: min-content;
+                grid-template-columns: 1fr;
+                grid-template-areas: "nav" "calendar";
+            }
+            #app > #nav > #btn_opts {
+                display: block;
+            }
+            #app > #opts {
+                grid-area: calendar;
+                z-index: 1000;
+            }
+            #app:not(.app--opts-expanded) > #opts {
+                display: none;
+            }
         }
     </style>
 </head>
 <body>
-    <main>
-        <input id="query" type="text" autocomplete="off" spellcheck="false" placeholder="e.g., activity=*rec*&activity=*lane swim*&activity=-basketball     (other properties: category, category_id, activity, activity_id, location)">
-        <div id="calendar"></div>
-        <div id="errbar" hidden></div>
-    </main>
+    <div id="app">
+        <nav id="nav">
+            <button id="btn_opts">Options</button>
+            <input type="text" id="query" autocomplete="off" autocapitalize="off" placeholder="Options...">
+            <button id="btn_ics">Subscribe</button>
+        </nav>
+        <aside id="opts">
+            <section class="opt" data-opt="activity" data-opt-name="Activity" data-opt-type="filter" data-opt-example="*badminton" data-opt-doc="Case-insensitive activity name filter supporting wildcards."></section>
+            <section class="opt" data-opt="activity_id" data-opt-name="Activity ID" data-opt-type="filter" data-opt-example="00000000-0000-0000-0000-000000000000" data-opt-doc="Case-insensitive internal activity UUID filter."></section>
+            <section class="opt" data-opt="category" data-opt-name="Category" data-opt-type="filter" data-opt-example="lane swim schedules" data-opt-doc="Case-insensitive internal category name filter."></section>
+            <section class="opt" data-opt="category_id" data-opt-name="Category ID" data-opt-type="filter" data-opt-example="721" data-opt-doc="Numerical internal category ID filter."></section>
+            <section class="opt" data-opt="location" data-opt-name="Location" data-opt-type="filter" data-opt-example="*pool*" data-opt-doc="Case-insensitive location filter supporting wildcards."></section>
+            <section class="opt" data-opt="no_notifications" data-opt-name="Disable Notifications" data-opt-type="flag" data-opt-doc="Don't add global notifications as all-day events."></section>
+            <section class="opt" data-opt="fake_cancelled" data-opt-name="Fake Cancelled" data-opt-type="flag" data-opt-doc="Don't mark cancelled events as cancelled; just change the event title to include CANCELLED (this prevents cancelled events from disappearing on some calendar applications like Outlook and Apple Calendar)."></section>
+            <section class="opt" data-opt="delete_cancelled" data-opt-name="Delete Cancelled" data-opt-type="flag" data-opt-doc="Entirely delete cancelled events from the calendar (this can reduce clutter in some calendar applications)."></section>
+            <section class="opt" data-opt="describe_recurrence" data-opt-name="Describe Recurrence" data-opt-type="flag" data-opt-doc="Show detailed information about recurrences in the event descriptions."></section>
+        </aside>
+        <main id="calendar">
+            <aside id="error" hidden></aside>
+        </main>
+    </div>
     <script src="https://unpkg.com/ical.js@1.5.0/build/ical.min.js"></script>
     <script src="https://unpkg.com/@fullcalendar/core@6.1.8/index.global.min.js"></script>
     <script src="https://unpkg.com/@fullcalendar/list@6.1.8/index.global.min.js"></script>
@@ -61,13 +177,220 @@
     <script src="https://unpkg.com/@fullcalendar/timegrid@6.1.8/index.global.min.js"></script>
     <script src="https://unpkg.com/@fullcalendar/icalendar@6.1.8/index.global.min.js"></script>
     <script>
-        const url = new URL(window.location.href)
-        url.hash = ""
-        url.pathname = url.pathname.replace(/\.html$/, "") + ".ics"
+        const app = document.getElementById("app")
 
-        const errbar = document.getElementById("errbar")
+        // query string handling
+        const query = app.querySelector("#query")
+        const paramsUpdated = []
+        const onParamsUpdated = fn => {
+            if (fn) {
+                paramsUpdated.push(fn)
+            }
+            fn(new URL(window.location).searchParams)
+        }
+        const updateSearch = (search = undefined) => {
+            const url = new URL(window.location)
+            if (search !== undefined) {
+                if (typeof search == "string" || search instanceof String) {
+                    if (!search.startsWith("?")) {
+                        search = "?" + search
+                    }
+                    if (search == "?") {
+                        search = ""
+                    }
+                    url.search = search
+                } else {
+                    search(url.searchParams)
+                }
+                window.history.replaceState(null, document.title, url)
+                query.value = decodeURIComponent(url.search.substring(1))
 
-        const calendar = new FullCalendar.Calendar(document.getElementById("calendar"), {
+                for (const fn of paramsUpdated) {
+                    fn(url.searchParams)
+                }
+            }
+            return url.searchParams
+        }
+        query.value = decodeURIComponent(window.location.search.substring(1))
+        query.addEventListener("input", () => updateSearch(query.value))
+
+        // options
+        for (const el of app.querySelectorAll("#opts > .opt[data-opt]")) {
+            const opt = {
+                query: el.dataset.opt,
+                name: el.dataset.optName ?? el.dataset.opt,
+                type: el.dataset.optType ?? "flag",
+                example: el.dataset.optExample ?? null,
+                doc: el.dataset.optDoc ?? null,
+            }
+            el.classList.add(`opt--${opt.type}`)
+
+            if (opt.type == "filter") {
+                const el_name = document.createElement("div")
+                el_name.classList.add("opt__name")
+                el_name.textContent = opt.name
+                el.appendChild(el_name)
+
+                if (opt.doc) {
+                    const el_doc = document.createElement("div")
+                    el_doc.classList.add("opt__doc")
+                    el_doc.textContent = opt.doc
+                    el.appendChild(el_doc)
+                }
+
+                const el_items = document.createElement("div")
+                el_items.classList.add("opt_items")
+                el.appendChild(el_items)
+
+                onParamsUpdated(params => {
+                    el_items.innerHTML = ""
+
+                    {
+                        const el_item = document.createElement("div")
+                        el_item.classList.add("opt__item")
+                        el_item.classList.add("opt__item--new")
+                        el_items.appendChild(el_item)
+
+                        const el_item_input = document.createElement("input")
+                        el_item_input.autocomplete = "off"
+                        el_item_input.autocapitalize = "off"
+                        if (opt.example) {
+                            el_item_input.placeholder = opt.example
+                        }
+                        el_item.appendChild(el_item_input)
+
+                        const el_item_btn_include = document.createElement("button")
+                        el_item_btn_include.textContent = "Include"
+                        el_item.appendChild(el_item_btn_include)
+
+                        const el_item_btn_exclude = document.createElement("button")
+                        el_item_btn_exclude.textContent = "Exclude"
+                        el_item.appendChild(el_item_btn_exclude)
+
+                        el_item_input.addEventListener("keydown", ev => {
+                            if (ev.keyCode == 13) {
+                                updateSearch(params => {
+                                    const flt = el_item_input.value.trim()
+                                    if (!params.getAll(opt.query).includes(flt)) {
+                                        params.append(opt.query, flt)
+                                    }
+                                    el_item_input.value = ""
+                                })
+                            }
+                        })
+
+                        el_item_btn_include.addEventListener("click", () => {
+                            updateSearch(params => {
+                                const flt = el_item_input.value.trim().replace(/^-/, "")
+                                if (!params.getAll(opt.query).includes(flt)) {
+                                    params.append(opt.query, flt)
+                                }
+                                el_item_input.value = ""
+                            })
+                        })
+
+                        el_item_btn_exclude.addEventListener("click", () => {
+                            updateSearch(params => {
+                                const flt = "-" + el_item_input.value.trim().replace(/^-/, "")
+                                if (!params.getAll(opt.query).includes(flt)) {
+                                    params.append(opt.query, flt)
+                                }
+                                el_item_input.value = ""
+                            })
+                        })
+                    }
+
+                    for (const item of params.getAll(opt.query)) {
+                        const el_item = document.createElement("div")
+                        el_item.classList.add("opt__item")
+                        el_items.appendChild(el_item)
+
+                        const el_item_input = document.createElement("input")
+                        el_item_input.value = item
+                        el_item_input.disabled = true
+                        el_item_input.autocomplete = "off"
+                        el_item_input.autocapitalize = "off"
+                        el_item.appendChild(el_item_input)
+
+                        const el_item_btn_remove = document.createElement("button")
+                        el_item_btn_remove.textContent = "x"
+                        el_item.appendChild(el_item_btn_remove)
+
+                        el_item_btn_remove.addEventListener("click", () => {
+                            updateSearch(params => {
+                                params.delete(opt.query, el_item_input.value)
+                            })
+                        })
+                    }
+                })
+
+                continue
+            }
+
+            if (opt.type == "flag") {
+                const el_label = document.createElement("label")
+                el_label.htmlFor = `val_${opt.query}`
+                el.appendChild(el_label)
+
+                const el_cb = document.createElement("input")
+                el_cb.classList.add("opt__cb")
+                el_cb.id = `val_${opt.query}`
+                el_cb.autocomplete = "off"
+                el_cb.type = "checkbox"
+                el_cb.name = opt.query
+                el_label.appendChild(el_cb)
+
+                const el_name = document.createElement("div")
+                el_name.classList.add("opt__name")
+                el_name.textContent = opt.name
+                el_label.appendChild(el_name)
+
+                if (opt.doc) {
+                    const el_doc = document.createElement("div")
+                    el_doc.classList.add("opt__doc")
+                    el_doc.textContent = opt.doc
+                    el_label.appendChild(el_doc)
+                }
+
+                onParamsUpdated(params => {
+                    el_cb.checked = params.has(opt.query)
+                })
+
+                el_cb.addEventListener("input", () => {
+                    updateSearch(params => {
+                        if (el_cb.checked) {
+                            params.set(opt.query, "1")
+                        } else {
+                            params.delete(opt.query)
+                        }
+                    })
+                })
+
+                continue
+            }
+
+            throw new TypeError(`Invalid option type ${opt.type} for option ${opt.query}`)
+        }
+
+        const icsURL = () => {
+            const url = new URL(window.location)
+            url.hash = ""
+            url.pathname = url.pathname.replace(/\.html$/, "") + ".ics"
+            return url.toString()
+        }
+
+        const btn_opts = app.querySelector("#btn_opts")
+        btn_opts.addEventListener("click", () => {
+            app.classList.toggle("app--opts-expanded")
+        })
+
+        const btn_ics = app.querySelector("#btn_ics")
+        btn_ics.addEventListener("click", () => {
+            prompt("Subscribe to the following link in your calendar application.", icsURL())
+        })
+
+        const errorEl = app.querySelector("#error")
+        const calendar = new FullCalendar.Calendar(app.querySelector("#calendar").appendChild(document.createElement("div")), {
             initialView: "listWeek",
             height: "100%",
             headerToolbar: {
@@ -112,11 +435,11 @@
                 return { domNodes }
             },
             eventSourceSuccess() {
-                errbar.hidden = true
+                errorEl.hidden = true
             },
             eventSourceFailure(error) {
-                errbar.textContent = `${error}`
-                errbar.hidden = false
+                errorEl.textContent = `${error}`
+                errorEl.hidden = false
             },
         })
         calendar.render()
@@ -124,27 +447,20 @@
         const reload = () => {
             calendar.getEventSources().forEach(x => x.remove())
             calendar.addEventSource({
-                url: url.href,
+                url: icsURL(),
                 format: `ics`,
             })
-            window.history.replaceState(null, document.title, url.search)
         }
 
-        const qbox = document.getElementById("query")
         let debounce
-        qbox.value = decodeURIComponent(url.search.substring(1))
-        qbox.addEventListener("input", () => {
+        onParamsUpdated(params => {
             if (debounce !== undefined) {
                 window.clearTimeout(debounce)
+                debounce = window.setTimeout(() => reload(), 250)
+            } else {
+                debounce = window.setTimeout(() => reload(), 1)
             }
-            debounce = window.setTimeout(() => {
-                debounce = undefined
-                url.search = qbox.value
-                reload()
-            }, 250)
         })
-
-        reload()
     </script>
 </body>
 </html>

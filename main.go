@@ -254,6 +254,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	_, opt.NoNotifications = q["no_notifications"]
 	_, opt.FakeCancelled = q["fake_cancelled"]     // don't set the cancellation status on cancelled events (e.g., if you want outlook mobile to still show the events)
 	_, opt.DeleteCancelled = q["delete_cancelled"] // entirely exclude cancelled events
+	_, opt.DescribeRecurrence = q["describe_recurrence"]
 
 	var generateCalendar generateCalendarFunc
 	if err := func() error {
@@ -311,6 +312,9 @@ type generateCalendarOptions struct {
 
 	// Entirely exclude cancelled events.
 	DeleteCancelled bool
+
+	// List recurrence info and exceptions in event description.
+	DescribeRecurrence bool
 }
 
 type generateCalendarFunc func(*generateCalendarOptions) []byte
@@ -592,7 +596,6 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 
 			base := activityBase[activityKey]
 
-			// write the base event
 			var byday []string
 			if base.Recurrence != nil {
 				if base.Recurrence[time.Sunday] > 0 {
@@ -617,12 +620,86 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 					byday = append(byday, "SA")
 				}
 			}
+
+			var excDesc strings.Builder
+			if base.Recurrence != nil && o.DescribeRecurrence {
+				excDesc.WriteString("\n\n")
+				excDesc.WriteString("Repeats ")
+				excDesc.WriteString(activityKey.StartTime.String())
+				excDesc.WriteString(" - ")
+				excDesc.WriteString(base.Instance.EndTime.String())
+				var hasDayExceptions bool
+				for x := time.Weekday(0); x < 7; x++ {
+					if base.Recurrence[x] == 0 {
+						hasDayExceptions = true
+						break
+					}
+				}
+				if hasDayExceptions {
+					excDesc.WriteString(" [")
+					for i, x := range byday {
+						if i != 0 {
+							excDesc.WriteString(", ")
+						}
+						excDesc.WriteString(x)
+					}
+					excDesc.WriteString("]")
+				}
+				excDesc.WriteString("\n")
+				if base.Recurrence != nil {
+					for d := base.Instance.Date.In(tz); !base.Last.In(tz).Before(d); d = d.AddDate(0, 0, 1) {
+						if base.Recurrence[d.Weekday()] > 0 {
+							dy, dm, dd := d.Date()
+							df := fusiongo.Date{Year: dy, Month: dm, Day: dd}
+							i := slices.IndexFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
+								return activityInstance.Date == df
+							})
+							if i == -1 {
+								excDesc.WriteString(" • not on ")
+								excDesc.WriteString(df.In(tz).Format("Mon Jan 02"))
+								excDesc.WriteString("\n")
+								continue
+							}
+							activityInstance := activities[activityKey][i]
+
+							var diffs []string
+							if activityInstance.Activity != base.Instance.Activity {
+								diffs = append(diffs, "name="+strconv.Quote(activityInstance.Activity))
+							}
+							if activityInstance.Description != base.Instance.Description {
+								diffs = append(diffs, "description")
+							}
+							if activityInstance.EndTime != base.Instance.EndTime {
+								diffs = append(diffs, "end="+activityInstance.EndTime.String())
+							}
+							if activityInstance.IsCancelled {
+								diffs = append(diffs, "cancelled")
+							}
+							if len(diffs) != 0 {
+								excDesc.WriteString(" • exception on ")
+								excDesc.WriteString(df.In(tz).Format("Mon Jan 02"))
+								for i, x := range diffs {
+									if i == 0 {
+										excDesc.WriteString(": ")
+									} else {
+										excDesc.WriteString(", ")
+									}
+									excDesc.WriteString(x)
+								}
+								excDesc.WriteString("\n")
+							}
+						}
+					}
+				}
+			}
+
+			// write the base event
 			fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
 			fmt.Fprintf(&ical, "UID:%s\r\n", uid)
 			fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
 			fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(base.Instance.Activity))
 			fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
-			fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(base.Instance.Description))
+			fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(base.Instance.Description+excDesc.String()))
 			fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(base.Instance.Date).In(tz).Format("20060102T150405")) // local
 			fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, base.Instance.EndTime.WithDate(base.Instance.Date).In(tz).Format("20060102T150405"))   // local
 			if base.Recurrence != nil {
@@ -683,7 +760,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 							}
 						}
 						fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
-						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(activityInstance.Description))
+						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(activityInstance.Description+excDesc.String()))
 						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(activityInstance.Date).In(tz).Format("20060102T150405"))  // local
 						fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityInstance.EndTime.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
 						if base.Recurrence != nil {

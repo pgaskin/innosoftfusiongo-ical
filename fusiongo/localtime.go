@@ -151,6 +151,10 @@ func (v Date) Less(x Date) bool {
 	return v.Year < x.Year
 }
 
+func (v Date) Date() (year int, month time.Month, day int) {
+	return v.Year, v.Month, v.Day
+}
+
 // Time is a time in local time.
 type Time struct {
 	Hour   int

@@ -598,12 +598,20 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			",", "\\,",
 		)
 
+		var calName string
+		switch schoolID {
+		case 110:
+			calName = "ARC Schedule"
+		default:
+			calName = "Schedule (" + strconv.Itoa(schoolID) + ")"
+		}
+
 		var ical bytes.Buffer
 		fmt.Fprintf(&ical, "BEGIN:VCALENDAR\r\n")
 		fmt.Fprintf(&ical, "VERSION:2.0\r\n")
 		fmt.Fprintf(&ical, "PRODID:arcical\r\n")
-		fmt.Fprintf(&ical, "NAME:ARC Schedule\r\n")
-		fmt.Fprintf(&ical, "X-WR-CALNAME:ARC Schedule\r\n")
+		fmt.Fprintf(&ical, "NAME:%s\r\n", icalTextEscape.Replace(calName))
+		fmt.Fprintf(&ical, "X-WR-CALNAME:%s\r\n", icalTextEscape.Replace(calName))
 		fmt.Fprintf(&ical, "REFRESH-INTERVAL;VALUE=DURATION:PT60M\r\n")
 		fmt.Fprintf(&ical, "X-PUBLISHED-TTL:PT60M\r\n")
 		fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", time.Now().UTC().Format("20060102T150405Z"))

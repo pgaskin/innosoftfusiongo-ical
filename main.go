@@ -226,7 +226,6 @@ func handleWeb(w http.ResponseWriter, _ *http.Request, _ int) {
 }
 
 var (
-	// TODO: refactor
 	cacheLock     sync.Mutex
 	cacheUpdated  = map[int]time.Time{}
 	cacheCalendar = map[int]generateCalendarFunc{}
@@ -242,19 +241,6 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		http.Error(w, fmt.Sprintf("Request query too long (%d > %d)", cur, lim), http.StatusRequestURITooLong)
 		return
 	}
-
-	q := r.URL.Query()
-
-	var opt generateCalendarOptions
-	opt.Category = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["category"]}
-	opt.CategoryID = filterer{Negation: true, Wildcard: false, CaseFold: true, Collapse: true, Patterns: q["category_id"]}
-	opt.Activity = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["activity"]}
-	opt.ActivityID = filterer{Negation: true, Wildcard: false, CaseFold: true, Collapse: true, Patterns: q["activity_id"]}
-	opt.Location = filterer{Negation: true, Wildcard: true, CaseFold: true, Collapse: true, Patterns: q["location"]}
-	_, opt.NoNotifications = q["no_notifications"]
-	_, opt.FakeCancelled = q["fake_cancelled"]     // don't set the cancellation status on cancelled events (e.g., if you want outlook mobile to still show the events)
-	_, opt.DeleteCancelled = q["delete_cancelled"] // entirely exclude cancelled events
-	_, opt.DescribeRecurrence = q["describe_recurrence"]
 
 	var generateCalendar generateCalendarFunc
 	if err := func() error {
@@ -287,7 +273,18 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	}
 
 	generateStart := time.Now()
-	buf := generateCalendar(&opt)
+	q := r.URL.Query()
+	buf := generateCalendar(&generateCalendarOptions{
+		Category:           queryFilter(q, "category", filterOpts{Negation: true, Wildcard: true, CaseFold: true, Collapse: true}),
+		CategoryID:         queryFilter(q, "category_id", filterOpts{Negation: true, Wildcard: false, CaseFold: true, Collapse: true}),
+		Activity:           queryFilter(q, "activity", filterOpts{Negation: true, Wildcard: true, CaseFold: true, Collapse: true}),
+		ActivityID:         queryFilter(q, "activity_id", filterOpts{Negation: true, Wildcard: false, CaseFold: true, Collapse: true}),
+		Location:           queryFilter(q, "location", filterOpts{Negation: true, Wildcard: true, CaseFold: true, Collapse: true}),
+		NoNotifications:    queryBool(q, "no_notifications"),
+		FakeCancelled:      queryBool(q, "fake_cancelled"),
+		DeleteCancelled:    queryBool(q, "delete_cancelled"),
+		DescribeRecurrence: queryBool(q, "describe_recurrence"),
+	})
 	w.Header().Set("X-Generate-Time", strconv.FormatFloat(time.Since(generateStart).Seconds(), 'f', -1, 64))
 
 	if r.Header.Get("Sec-Fetch-Dest") != "document" {
@@ -300,12 +297,40 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	w.Write(buf)
 }
 
+// queryBool returns true if q[k] is empty and the last value is empty, k, or
+// some form of true (case-insensitive).
+func queryBool(q url.Values, k string) bool {
+	if v, ok := q[k]; ok {
+		if len(v) > 0 {
+			if last := strings.TrimSpace(v[len(v)-1]); last != "" && !strings.EqualFold(last, k) {
+				if t, _ := strconv.ParseBool(v[len(v)-1]); !t {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// queryFilter parses filters from instances of k or k[].
+func queryFilter(q url.Values, k string, o filterOpts) filter {
+	var v []string
+	if x := q[k]; len(x) != 0 {
+		v = append(v, x...)
+	}
+	if x := q[k+"[]"]; len(x) != 0 {
+		v = append(v, x...)
+	}
+	return makeFilter(v, o)
+}
+
 type generateCalendarOptions struct {
-	Category   filterer
-	CategoryID filterer
-	Activity   filterer
-	ActivityID filterer
-	Location   filterer
+	Category   filter
+	CategoryID filter
+	Activity   filter
+	ActivityID filter
+	Location   filter
 
 	// Don't include notifications in the calendar.
 	NoNotifications bool
@@ -787,70 +812,75 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 	}, nil
 }
 
-type filterer struct {
-	Patterns []string
+type filterOpts struct {
 	Negation bool // support exclude patterns
 	Wildcard bool // support * wildcards
 	CaseFold bool // case-insensitive match
 	Collapse bool // replace consecutive whitespace with a single space, trim leading/trailing
-
-	compile sync.Once
-	include []*regexp.Regexp
-	exclude []*regexp.Regexp
 }
 
-func (f *filterer) Match(s string) bool {
-	f.compile.Do(func() {
-		for _, p := range f.Patterns {
-			var negate bool
-			if f.Negation {
-				p, negate = strings.CutPrefix(p, "-")
-			}
+type filter struct {
+	collapse bool
+	include  []*regexp.Regexp
+	exclude  []*regexp.Regexp
+}
 
-			var wildStart, wildEnd bool
-			if f.Wildcard {
-				p, wildStart = strings.CutPrefix(p, "*")
-				p, wildEnd = strings.CutSuffix(p, "*")
-			}
-
-			if f.Collapse {
-				p = strings.Join(strings.Fields(p), " ")
-			}
-
-			var re strings.Builder
-			if f.CaseFold {
-				re.WriteString("(?si)")
-			} else {
-				re.WriteString("(?s)")
-			}
-			if !wildStart {
-				re.WriteByte('^')
-			}
-			for i, part := range strings.FieldsFunc(p, func(r rune) bool {
-				return r == '*'
-			}) {
-				if i != 0 {
-					re.WriteString(".+")
-				}
-				re.WriteString(regexp.QuoteMeta(part))
-			}
-			if !wildEnd {
-				re.WriteByte('$')
-			}
-			if c := regexp.MustCompile(re.String()); negate {
-				f.exclude = append(f.exclude, c)
-			} else {
-				f.include = append(f.include, c)
-			}
+func makeFilter(ps []string, o filterOpts) filter {
+	f := filter{
+		collapse: o.Collapse,
+	}
+	for _, p := range ps {
+		var negate bool
+		if o.Negation {
+			p, negate = strings.CutPrefix(p, "-")
 		}
-	})
 
+		var wildStart, wildEnd bool
+		if o.Wildcard {
+			p, wildStart = strings.CutPrefix(p, "*")
+			p, wildEnd = strings.CutSuffix(p, "*")
+		}
+
+		if o.Collapse {
+			p = strings.Join(strings.Fields(p), " ")
+		}
+
+		var re strings.Builder
+		if o.CaseFold {
+			re.WriteString("(?si)")
+		} else {
+			re.WriteString("(?s)")
+		}
+		if !wildStart {
+			re.WriteByte('^')
+		}
+		for i, part := range strings.FieldsFunc(p, func(r rune) bool {
+			return r == '*'
+		}) {
+			if i != 0 {
+				re.WriteString(".+")
+			}
+			re.WriteString(regexp.QuoteMeta(part))
+		}
+		if !wildEnd {
+			re.WriteByte('$')
+		}
+		if c := regexp.MustCompile(re.String()); negate {
+			f.exclude = append(f.exclude, c)
+		} else {
+			f.include = append(f.include, c)
+		}
+	}
+	return f
+}
+
+func (f filter) Match(s string) bool {
 	var match bool
 	if len(f.include) == 0 {
 		match = true
 	}
 	if !match || len(f.exclude) != 0 {
-		if f.Collapse {
+		if f.collapse {
 			s = strings.Join(strings.Fields(s), " ")
 		}
 		for _, c := range f.include {

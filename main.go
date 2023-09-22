@@ -346,6 +346,24 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		notifications.Notifications[ni].Text = strings.TrimSpace(n.Text)
 	}
 
+	// get calendar boundaries
+	var calStart, calEnd time.Time
+	for _, a := range schedule.Activities {
+		aStart, aEnd := a.Time.In(tz)
+		if calStart.IsZero() || aStart.Before(calStart) {
+			calStart = aStart
+		}
+		if calEnd.IsZero() || aEnd.After(calEnd) {
+			calEnd = aEnd
+		}
+	}
+	if calStart.IsZero() {
+		calStart = time.Now().In(tz)
+	}
+	if calEnd.IsZero() {
+		calEnd = time.Now().In(tz)
+	}
+
 	// check some basic assumptions
 	// - we depend (for correctness, not code) on the fact that an activity is uniquely identified by its id and location and can only occur once per start time per day
 	// - we also depend on each activity having at least one category (this should always be true)
@@ -380,8 +398,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 	}
 
 	// collect activity instance event info and group into recurrence groups
-	activities := map[ActivityKey][]ActivityInstance{}
-	for ai, a := range schedule.Activities {
+	activities := mapGroupByInto(schedule.Activities, func(ai int, a fusiongo.ActivityInstance) (ActivityKey, ActivityInstance) {
 		activityKey := ActivityKey{
 			ActivityID: a.ActivityID,
 			StartTime:  a.Time.Start,
@@ -396,8 +413,8 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			Categories:  schedule.Categories[ai].Category,
 			CategoryIDs: schedule.Categories[ai].CategoryID,
 		}
-		activities[activityKey] = append(activities[activityKey], activityInstance)
-	}
+		return activityKey, activityInstance
+	})
 
 	// split out days which consistently have different end times
 	{
@@ -405,54 +422,29 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		for activityKey, activityInstances := range activities {
 
 			// group the activities by their weekday
-			var actByWeekday [7][]ActivityInstance
-			for _, activityInstance := range activityInstances {
-				wd := activityInstance.Date.WithTime(activityKey.StartTime).In(tz).Weekday()
-				actByWeekday[wd] = append(actByWeekday[wd], activityInstance)
-			}
+			actByWeekday := weekdayGroupBy(activityInstances, func(i int, ai ActivityInstance) time.Weekday {
+				return ai.Date.WithTime(activityKey.StartTime).In(tz).Weekday()
+			})
 
 			// get the most common end time for each weekday
-			var etByWeekday [7]fusiongo.Time
-			for wd, acts := range actByWeekday {
-				if len(acts) != 0 {
-					etByWeekday[wd], _ = mostCommonFunc(acts, func(activityInstance ActivityInstance) fusiongo.Time {
-						return activityInstance.EndTime
-					})
-				}
-			}
+			etByWeekday := weekdayMapInto(actByWeekday, func(w time.Weekday, ais []ActivityInstance) fusiongo.Time {
+				return mostCommonBy(ais, func(activityInstance ActivityInstance) fusiongo.Time {
+					return activityInstance.EndTime
+				})
+			})
 
 			// get the weekdays for each most common end time
-			etWeekdays := map[fusiongo.Time][7]bool{}
-			for wd, et := range etByWeekday {
-				if len(actByWeekday[wd]) != 0 {
-					x := etWeekdays[et]
-					x[wd] = true
-					etWeekdays[et] = x
-				}
-			}
-
-			// sanity check
-			var seenWeekdays [7]bool
-			for _, wds := range etWeekdays {
-				for wd, b := range wds {
-					if b {
-						if seenWeekdays[wd] {
-							panic("wtf: already used weekday " + time.Weekday(wd).String() + " for another end time") // should be impossible given the code above
-						}
-						seenWeekdays[wd] = true
-					}
-				}
-			}
+			weekdaysByEt := weekdayGroupInvertIf(etByWeekday, func(wd time.Weekday, k fusiongo.Time) bool {
+				return len(actByWeekday[wd]) != 0
+			})
 
 			// re-group the activities including the weekday split
-			for _, wds := range etWeekdays {
+			for _, wds := range weekdaysByEt {
 				activityKeyNew := activityKey
 				activityKeyNew.Weekday = wds
-				for wd, b := range wds {
-					if b {
-						activitiesNew[activityKeyNew] = append(activitiesNew[activityKeyNew], actByWeekday[wd]...)
-					}
-				}
+				activitiesNew[activityKeyNew] = flatFilter(actByWeekday[:], func(i int) bool {
+					return wds[i]
+				})
 			}
 		}
 		activities = activitiesNew
@@ -479,103 +471,37 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		return activityKeys[i].ActivityID < activityKeys[j].ActivityID
 	})
 
-	type ActivityBase struct {
-		Instance ActivityInstance
-
-		Recurrence map[time.Weekday]int
-		Last       fusiongo.Date
-	}
-
-	// heuristically determine the recurrence info
-	activityBase := make(map[ActivityKey]ActivityBase, len(activities))
-	for _, activityKey := range activityKeys {
-		activityInstances := activities[activityKey]
-
-		// if there's only one instance, no recurrence
-		if len(activityInstances) == 1 {
-			activityBase[activityKey] = ActivityBase{
-				Instance: activityInstances[0],
-			}
-			continue
-		}
-
-		base := ActivityBase{
-			Recurrence: map[time.Weekday]int{},
-		}
-
-		// find the first and last occurrences (note: we sorted it earlier)
-		base.Instance.Date = activityInstances[0].Date
-		base.Last = activityInstances[len(activityInstances)-1].Date
-
-		// figure out the recurrence pattern
-		for _, activityInstance := range activityInstances {
-			base.Recurrence[time.Weekday(activityInstance.Date.In(tz).Weekday())]++
-		}
-
-		// find the first most common name
-		base.Instance.Activity, _ = mostCommonFunc(activityInstances, func(activityInstance ActivityInstance) string {
-			return activityInstance.Activity
-		})
-
-		// find the most common end time
-		base.Instance.EndTime, _ = mostCommonFunc(activityInstances, func(activityInstance ActivityInstance) fusiongo.Time {
-			return activityInstance.EndTime
-		})
-
-		// keep the description if all are the same
-		base.Instance.Activity = activityInstances[0].Activity
-		base.Instance.Description = activityInstances[0].Description
-
-		activityBase[activityKey] = base
-	}
-
-	// get calendar boundaries
-	var calStart, calEnd time.Time
-	for _, a := range schedule.Activities {
-		aStart, aEnd := a.Time.In(tz)
-		if calStart.IsZero() || aStart.Before(calStart) {
-			calStart = aStart
-		}
-		if calEnd.IsZero() || aEnd.After(calEnd) {
-			calStart = aEnd
-		}
-	}
-	if calStart.IsZero() {
-		calStart = time.Now().In(tz)
-	}
-	if calEnd.IsZero() {
-		calEnd = time.Now().In(tz)
-	}
-
 	return func(o *generateCalendarOptions) []byte {
-		// compute excluded activity keys
-		activityKeyExcludes := map[ActivityKey]bool{}
-		for _, activityKey := range activityKeys {
-			if !o.Location.Match(activityKey.Location) {
-				// location doesn't match
-				activityKeyExcludes[activityKey] = true
+		// pre-filter activities
+		activityFilter := map[ActivityKey][]bool{}
+		for _, ak := range activityKeys {
+			if !o.Location.Match(ak.Location) {
 				continue
 			}
-			if !slices.ContainsFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
-				if !o.Activity.Match(activityInstance.Activity) || !o.ActivityID.Match(activityKey.ActivityID) {
-					return false
-				}
-				if !slices.ContainsFunc(activityInstance.Categories, o.Category.Match) {
-					return false
-				}
-				if !slices.ContainsFunc(activityInstance.CategoryIDs, o.CategoryID.Match) {
-					return false
-				}
-				return true
-			}) {
-				// no matching instances
-				activityKeyExcludes[activityKey] = true
+			if !o.ActivityID.Match(ak.ActivityID) {
 				continue
+			}
+			for i, ai := range activities[ak] {
+				if o.DeleteCancelled && ai.IsCancelled {
+					continue
+				}
+				if !o.Activity.Match(ai.Activity) {
+					continue
+				}
+				if !slices.ContainsFunc(ai.Categories, o.Category.Match) {
+					continue
+				}
+				if !slices.ContainsFunc(ai.CategoryIDs, o.CategoryID.Match) {
+					continue
+				}
+				if _, ok := activityFilter[ak]; !ok {
+					activityFilter[ak] = make([]bool, len(activities[ak]))
+				}
+				activityFilter[ak][i] = true
 			}
 		}
 
 		// generate calendar
-		// TODO: refactor, handle values better
 		icalTextEscape := strings.NewReplacer(
 			"\r\n", "\\n",
 			"\n", "\\n",
@@ -593,6 +519,8 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		}
 
 		var ical bytes.Buffer
+
+		// write calendar info
 		fmt.Fprintf(&ical, "BEGIN:VCALENDAR\r\n")
 		fmt.Fprintf(&ical, "VERSION:2.0\r\n")
 		fmt.Fprintf(&ical, "PRODID:arcical\r\n")
@@ -602,6 +530,8 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		fmt.Fprintf(&ical, "X-PUBLISHED-TTL:PT60M\r\n")
 		fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", time.Now().UTC().Format("20060102T150405Z"))
 		fmt.Fprintf(&ical, "COLOR:%s\r\n", "firebrick") // note: closest CSS extended color keyword to red #b90e31 (=b22222 firebrick) blue #002452 (=000080 navy)
+
+		// write timezone info
 		fmt.Fprintf(&ical, "BEGIN:VTIMEZONE\r\n")
 		fmt.Fprintf(&ical, "TZID:%s\r\n", tz)
 		for start, end := calStart.ZoneBounds(); !start.After(calEnd.AddDate(1, 0, 0)); start, end = end.ZoneBounds() {
@@ -622,76 +552,86 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			}
 		}
 		fmt.Fprintf(&ical, "END:VTIMEZONE\r\n")
-		for _, activityKey := range activityKeys {
-			if activityKeyExcludes[activityKey] {
+
+		// write activities
+		for _, ak := range activityKeys {
+			if _, include := activityFilter[ak]; !include {
 				continue
 			}
+			ais := activities[ak]
 
 			// https://www.nylas.com/blog/calendar-events-rrules/
 
-			// generate a uid from all fields of activityKey
-			var uidWd string
-			for w, c := range activityKey.Weekday {
-				if c {
-					uidWd += strings.ToUpper(time.Weekday(w).String()[:2])
-					uidWd += "-"
+			// get the iCalendar (2-letter uppercase) days the instances occurs on
+			akDays := weekdayFilterMap(ak.Weekday, func(wd time.Weekday, x bool) (string, bool) {
+				if x {
+					return strings.ToUpper(time.Weekday(wd).String()[:2]), true
 				}
-			}
+				return "", false
+			})
+
+			// generate a uid from all fields of activityKey
 			uid := fmt.Sprintf(
-				"%s-%x-%s%02d%02d%02d@school%d.innosoftfusiongo.com",
-				activityKey.ActivityID, sha1.Sum([]byte(activityKey.Location)),
-				uidWd,
-				activityKey.StartTime.Hour, activityKey.StartTime.Minute, activityKey.StartTime.Second,
+				"%s-%x-%s-%02d%02d%02d@school%d.innosoftfusiongo.com",
+				ak.ActivityID, sha1.Sum([]byte(ak.Location)),
+				strings.Join(akDays, "-"),
+				ak.StartTime.Hour, ak.StartTime.Minute, ak.StartTime.Second,
 				schoolID,
 			)
 			if len(uid) >= 255 {
 				panic("wtf: generated uid too long")
 			}
 
-			base := activityBase[activityKey]
+			// base and last instances, recurrence (ignoring filters)
+			var (
+				aiBase = ais[0]
+				aiLast = ais[len(ais)-1]
+				recur  func(fn func(d fusiongo.Date, ex bool, i int)) // iterates over recurrence dates, using (d, true, -1) for exclusions, and setting ex if aiBase != ais[ai]
+			)
+			if len(ais) > 1 {
 
-			var byday []string
-			if base.Recurrence != nil {
-				if base.Recurrence[time.Sunday] > 0 {
-					byday = append(byday, "SU")
-				}
-				if base.Recurrence[time.Monday] > 0 {
-					byday = append(byday, "MO")
-				}
-				if base.Recurrence[time.Tuesday] > 0 {
-					byday = append(byday, "TU")
-				}
-				if base.Recurrence[time.Wednesday] > 0 {
-					byday = append(byday, "WE")
-				}
-				if base.Recurrence[time.Thursday] > 0 {
-					byday = append(byday, "TH")
-				}
-				if base.Recurrence[time.Friday] > 0 {
-					byday = append(byday, "FR")
-				}
-				if base.Recurrence[time.Saturday] > 0 {
-					byday = append(byday, "SA")
+				// set the fields to the first (for determinism) most common values
+				aiBase.EndTime = mostCommonBy(ais, func(ai ActivityInstance) fusiongo.Time {
+					return ai.EndTime
+				})
+				aiBase.Activity = mostCommonBy(ais, func(ai ActivityInstance) string {
+					return ai.Activity
+				})
+				aiBase.Description = mostCommonBy(ais, func(ai ActivityInstance) string {
+					return ai.Description
+				})
+				aiBase.IsCancelled = false // cancellation should only be set on exceptions
+
+				// set the recurrence function
+				recur = func(fn func(d fusiongo.Date, ex bool, i int)) {
+					for d := aiBase.Date.In(tz); !aiLast.Date.In(tz).Before(d); d = d.AddDate(0, 0, 1) {
+						if ak.Weekday[d.Weekday()] {
+							dy, dm, dd := d.Date()
+							df := fusiongo.Date{Year: dy, Month: dm, Day: dd}
+							if i := slices.IndexFunc(ais, func(activityInstance ActivityInstance) bool {
+								return activityInstance.Date == df
+							}); i != -1 {
+								ai := ais[i]
+								fn(df, ai.EndTime != aiBase.EndTime || ai.Activity != aiBase.Activity || ai.Description != aiBase.Description || ai.IsCancelled, i)
+							} else {
+								fn(df, true, -1)
+							}
+						}
+					}
 				}
 			}
 
+			// describe recurrence information if enabled
 			var excDesc strings.Builder
-			if base.Recurrence != nil && o.DescribeRecurrence {
+			if o.DescribeRecurrence && recur != nil {
 				excDesc.WriteString("\n\n")
 				excDesc.WriteString("Repeats ")
-				excDesc.WriteString(activityKey.StartTime.StringCompact())
+				excDesc.WriteString(ak.StartTime.StringCompact())
 				excDesc.WriteString(" - ")
-				excDesc.WriteString(base.Instance.EndTime.StringCompact())
-				var hasDayExceptions bool
-				for x := time.Weekday(0); x < 7; x++ {
-					if base.Recurrence[x] == 0 {
-						hasDayExceptions = true
-						break
-					}
-				}
-				if hasDayExceptions {
+				excDesc.WriteString(aiBase.EndTime.StringCompact())
+				if slices.Contains(ak.Weekday[:], false) {
 					excDesc.WriteString(" [")
-					for i, x := range byday {
+					for i, x := range akDays {
 						if i != 0 {
 							excDesc.WriteString(", ")
 						}
@@ -699,141 +639,121 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 					}
 					excDesc.WriteString("]")
 				}
-				if base.Recurrence != nil {
-					for d := base.Instance.Date.In(tz); !base.Last.In(tz).Before(d); d = d.AddDate(0, 0, 1) {
-						if base.Recurrence[d.Weekday()] > 0 {
-							dy, dm, dd := d.Date()
-							df := fusiongo.Date{Year: dy, Month: dm, Day: dd}
-							i := slices.IndexFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
-								return activityInstance.Date == df
-							})
-
-							var hasDiff bool
-							var diff string
-							var diffs []string
-							if i == -1 {
-								diff = "not"
+				recur(func(d fusiongo.Date, ex bool, i int) {
+					if ex {
+						var (
+							hasDiff bool
+							diff    string
+							diffs   []string
+						)
+						if i == -1 {
+							diff = "not"
+							hasDiff = true
+						} else if !activityFilter[ak][i] {
+							diff = "does not match filter"
+							hasDiff = true
+						} else {
+							ai := ais[i]
+							switch {
+							case ai.IsCancelled:
+								diff = "cancelled"
 								hasDiff = true
-							} else {
-								activityInstance := activities[activityKey][i]
-								switch {
-								case activityInstance.IsCancelled:
-									diff = "cancelled"
-									hasDiff = true
-								case activityInstance.EndTime != base.Instance.EndTime:
-									diff = "ends at " + activityInstance.EndTime.StringCompact()
-									hasDiff = true
-								default:
-									diff = "differs"
-								}
-								if activityInstance.Activity != base.Instance.Activity {
-									diffs = append(diffs, "name="+strconv.Quote(activityInstance.Activity))
-									hasDiff = true
-								}
-								if activityInstance.Description != base.Instance.Description {
-									diffs = append(diffs, "description="+strconv.Quote(activityInstance.Description))
-									hasDiff = true
-								}
+							case ai.EndTime != aiBase.EndTime:
+								diff = "ends at " + ai.EndTime.StringCompact()
+								hasDiff = true
+							default:
+								diff = "differs"
 							}
-							if hasDiff {
-								excDesc.WriteString("\n • ")
-								excDesc.WriteString(diff)
-								excDesc.WriteString(" on ")
-								excDesc.WriteString(df.In(tz).Format("Mon Jan 02"))
-								for i, x := range diffs {
-									if i == 0 {
-										excDesc.WriteString(": ")
-									} else {
-										excDesc.WriteString(", ")
-									}
-									excDesc.WriteString(x)
+							if ai.Activity != aiBase.Activity {
+								diffs = append(diffs, "name="+strconv.Quote(ai.Activity))
+								hasDiff = true
+							}
+							if ai.Description != aiBase.Description {
+								diffs = append(diffs, "description="+strconv.Quote(ai.Description))
+								hasDiff = true
+							}
+						}
+						if hasDiff {
+							excDesc.WriteString("\n • ")
+							excDesc.WriteString(diff)
+							excDesc.WriteString(" on ")
+							excDesc.WriteString(d.In(tz).Format("Mon Jan 02"))
+							for i, x := range diffs {
+								if i == 0 {
+									excDesc.WriteString(": ")
+								} else {
+									excDesc.WriteString(", ")
 								}
+								excDesc.WriteString(x)
 							}
 						}
 					}
+				})
+			}
+
+			// write events
+			writeEvent := func(ai ActivityInstance, base bool) {
+				// write event info
+				fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
+				fmt.Fprintf(&ical, "UID:%s\r\n", uid)
+				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z"))       // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
+				fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc
+
+				// write event status information if it's the only event or a recurrence exception
+				if recur == nil || !base {
+					if !ai.IsCancelled {
+						fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(ai.Activity))
+					} else {
+						fmt.Fprintf(&ical, "SUMMARY:CANCELLED - %s\r\n", icalTextEscape.Replace(ai.Activity))
+						if !o.FakeCancelled {
+							fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
+						}
+					}
+				} else {
+					fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(ai.Activity))
 				}
+
+				// write more event info
+				fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(ak.Location))
+				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(ai.Description+excDesc.String()))
+				fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, ak.StartTime.WithDate(ai.Date).In(tz).Format("20060102T150405")) // local
+				fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, ai.EndTime.WithDate(ai.Date).In(tz).Format("20060102T150405"))     // local
+
+				// write recurrence info if it's a recurring event
+				if recur != nil {
+					if base {
+						fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", ai.EndTime.WithDate(aiLast.Date).In(tz).Format("20060102T150405"), strings.Join(akDays, ",")) // local if dtstart is local, else utc
+						recur(func(d fusiongo.Date, _ bool, i int) {
+							if i == -1 || !activityFilter[ak][i] {
+								fmt.Fprintf(&ical, "EXDATE;TZID=%s:%s\r\n", tz, ak.StartTime.WithDate(d).In(tz).Format("20060102T150405"))
+							}
+						})
+					} else {
+						fmt.Fprintf(&ical, "RECURRENCE-ID;TZID=%s:%s\r\n", tz, ak.StartTime.WithDate(ai.Date).In(tz).Format("20060102T150405")) // local
+					}
+				}
+
+				// done
+				fmt.Fprintf(&ical, "END:VEVENT\r\n")
 			}
 
 			// write the base event
-			fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
-			fmt.Fprintf(&ical, "UID:%s\r\n", uid)
-			fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
-			fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(base.Instance.Activity))
-			fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
-			fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(base.Instance.Description+excDesc.String()))
-			fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(base.Instance.Date).In(tz).Format("20060102T150405")) // local
-			fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, base.Instance.EndTime.WithDate(base.Instance.Date).In(tz).Format("20060102T150405"))   // local
-			if base.Recurrence != nil {
-				fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", base.Instance.EndTime.WithDate(base.Last).In(tz).Format("20060102T150405"), strings.Join(byday, ",")) // local if dtstart is local, else utc
-				for d := base.Instance.Date.In(tz); !base.Last.In(tz).Before(d); d = d.AddDate(0, 0, 1) {
-					if base.Recurrence[d.Weekday()] > 0 {
-						if dy, dm, dd := d.Date(); !slices.ContainsFunc(activities[activityKey], func(activityInstance ActivityInstance) bool {
-							if activityInstance.Date != (fusiongo.Date{Year: dy, Month: dm, Day: dd}) {
-								return false
-							}
-							if activityInstance.IsCancelled && o.DeleteCancelled {
-								return false
-							}
-							if !o.Activity.Match(activityInstance.Activity) || !o.ActivityID.Match(activityKey.ActivityID) {
-								return false
-							}
-							if !slices.ContainsFunc(activityInstance.Categories, o.Category.Match) {
-								return false
-							}
-							if !slices.ContainsFunc(activityInstance.CategoryIDs, o.Category.Match) {
-								return false
-							}
-							return true
-						}) {
-							fmt.Fprintf(&ical, "EXDATE;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(fusiongo.Date{Year: dy, Month: dm, Day: dd}).In(tz).Format("20060102T150405"))
-						}
-					}
-				}
-			}
-			fmt.Fprintf(&ical, "END:VEVENT\r\n")
+			writeEvent(aiBase, true)
 
 			// write recurrence exceptions
-			if base.Recurrence != nil {
-				for _, activityInstance := range activities[activityKey] {
-					if activityInstance.IsCancelled && o.DeleteCancelled {
-						continue
+			if recur != nil {
+				recur(func(_ fusiongo.Date, ex bool, i int) {
+					if ex {
+						if i != -1 && activityFilter[ak][i] {
+							writeEvent(ais[i], false)
+						}
 					}
-					if activityInstance.Activity != base.Instance.Activity || activityInstance.Description != base.Instance.Description || activityInstance.EndTime != base.Instance.EndTime || activityInstance.IsCancelled {
-						if !o.Activity.Match(activityInstance.Activity) || !o.ActivityID.Match(activityKey.ActivityID) {
-							continue
-						}
-						if !slices.ContainsFunc(activityInstance.Categories, o.Category.Match) {
-							continue
-						}
-						if !slices.ContainsFunc(activityInstance.CategoryIDs, o.CategoryID.Match) {
-							continue
-						}
-						fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
-						fmt.Fprintf(&ical, "UID:%s\r\n", uid)
-						fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z"))       // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
-						fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", schedule.Updated.UTC().Format("20060102T150405Z")) // utc
-						if !activityInstance.IsCancelled {
-							fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape.Replace(activityInstance.Activity))
-						} else {
-							fmt.Fprintf(&ical, "SUMMARY:CANCELLED - %s\r\n", icalTextEscape.Replace(activityInstance.Activity))
-							if !o.FakeCancelled {
-								fmt.Fprintf(&ical, "STATUS:CANCELLED\r\n")
-							}
-						}
-						fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape.Replace(activityKey.Location))
-						fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape.Replace(activityInstance.Description+excDesc.String()))
-						fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(activityInstance.Date).In(tz).Format("20060102T150405"))  // local
-						fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, activityInstance.EndTime.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
-						if base.Recurrence != nil {
-							fmt.Fprintf(&ical, "RECURRENCE-ID;TZID=%s:%s\r\n", tz, activityKey.StartTime.WithDate(activityInstance.Date).In(tz).Format("20060102T150405")) // local
-						}
-						fmt.Fprintf(&ical, "END:VEVENT\r\n")
-					}
-				}
+				})
 			}
 		}
+
+		// write notifications as all-day events for the current day
 		if !o.NoNotifications {
-			// add notifications as all-day events for the current day
 			for _, n := range notifications.Notifications {
 				// https://stackoverflow.com/questions/1716237/single-day-all-day-appointments-in-ics-files
 
@@ -851,8 +771,9 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				fmt.Fprintf(&ical, "END:VEVENT\r\n")
 			}
 		}
-		fmt.Fprintf(&ical, "END:VCALENDAR\r\n")
 
+		// done
+		fmt.Fprintf(&ical, "END:VCALENDAR\r\n")
 		return ical.Bytes()
 	}, nil
 }
@@ -939,7 +860,77 @@ func (f *filterer) Match(s string) bool {
 	return match
 }
 
-func mostCommon[T comparable](xs []T) (common T, exceptions int) {
+type WeekdayMapOf[T any] [7]T
+
+// weekdayGroupBy groups xs by arbitrary [time.Weekday] keys.
+func weekdayGroupBy[T any](xs []T, fn func(int, T) time.Weekday) WeekdayMapOf[[]T] {
+	var m [7][]T
+	for i, x := range xs {
+		wd := fn(i, x)
+		m[wd] = append(m[wd], x)
+	}
+	return m
+}
+
+// weekdayMapInto converts WeekdayMapOf[T] into WeekdayMapOf[U].
+func weekdayMapInto[T any, U any](xs WeekdayMapOf[T], fn func(time.Weekday, T) U) WeekdayMapOf[U] {
+	var r WeekdayMapOf[U]
+	for i, x := range xs {
+		r[i] = fn(time.Weekday(i), x)
+	}
+	return r
+}
+
+// weekdayFilterMap converts WeekdayMapOf[T] into []U where fn(T) returns (U, true).
+func weekdayFilterMap[T, U any](xs WeekdayMapOf[T], fn func(time.Weekday, T) (U, bool)) []U {
+	var r []U
+	for i, x := range xs {
+		if u, ok := fn(time.Weekday(i), x); ok {
+			r = append(r, u)
+		}
+	}
+	return r
+}
+
+// weekdayGroupInvertIf returns r such that r[k][weekday] iff fn(wd, k) and
+// m[weekday] == k. Note that this means that r[k][weekday] will only be true
+// for a single k.
+func weekdayGroupInvertIf[T comparable](m WeekdayMapOf[T], fn func(time.Weekday, T) bool) map[T][7]bool {
+	r := map[T][7]bool{}
+	for i, k := range m {
+		if fn(time.Weekday(i), k) {
+			x := r[k]
+			x[i] = true
+			r[k] = x
+		}
+	}
+	return r
+}
+
+// flatFilter flattens a, skipping values where !fn(i).
+func flatFilter[T any](a [][]T, fn func(int) bool) []T {
+	var r []T
+	for i, x := range a {
+		if fn(i) {
+			r = append(r, x...)
+		}
+	}
+	return r
+}
+
+// mapGroupByInto groups xs by arbitrary keys, converting the values.
+func mapGroupByInto[T any, K comparable, V any](xs []T, fn func(int, T) (K, V)) map[K][]V {
+	m := make(map[K][]V)
+	for i, x := range xs {
+		k, v := fn(i, x)
+		m[k] = append(m[k], v)
+	}
+	return m
+}
+
+// mostCommon returns the first seen most common T in xs, returning the zero
+// value of T if xs is empty.
+func mostCommon[T comparable](xs []T) (value T) {
 	var (
 		els      []T
 		elCounts = map[T]int{}
@@ -953,19 +944,15 @@ func mostCommon[T comparable](xs []T) (common T, exceptions int) {
 	var elCount int
 	for _, el := range els {
 		if n := elCounts[el]; n > elCount {
-			common = el
+			value = el
 			elCount = n
-		}
-	}
-	for _, x := range xs {
-		if x != common {
-			exceptions++
 		}
 	}
 	return
 }
 
-func mostCommonFunc[T comparable, V any](vs []V, fn func(V) T) (common T, exceptions int) {
+// mostCommonBy is like mostCommon, but converts V into T first.
+func mostCommonBy[T comparable, V any](vs []V, fn func(V) T) (value T) {
 	var xs []T
 	for _, v := range vs {
 		xs = append(xs, fn(v))

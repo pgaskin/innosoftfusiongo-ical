@@ -985,10 +985,10 @@ func (f filter) Match(ss ...string) bool {
 	return match
 }
 
-type WeekdayMapOf[T any] [7]T
+type weekdayMapOf[T any] [7]T
 
 // weekdayGroupBy groups xs by arbitrary [time.Weekday] keys.
-func weekdayGroupBy[T any](xs []T, fn func(int, T) time.Weekday) WeekdayMapOf[[]T] {
+func weekdayGroupBy[T any](xs []T, fn func(int, T) time.Weekday) weekdayMapOf[[]T] {
 	var m [7][]T
 	for i, x := range xs {
 		wd := fn(i, x)
@@ -997,17 +997,17 @@ func weekdayGroupBy[T any](xs []T, fn func(int, T) time.Weekday) WeekdayMapOf[[]
 	return m
 }
 
-// weekdayMapInto converts WeekdayMapOf[T] into WeekdayMapOf[U].
-func weekdayMapInto[T any, U any](xs WeekdayMapOf[T], fn func(time.Weekday, T) U) WeekdayMapOf[U] {
-	var r WeekdayMapOf[U]
+// weekdayMapInto converts weekdayMapOf[T] into weekdayMapOf[U].
+func weekdayMapInto[T any, U any](xs weekdayMapOf[T], fn func(time.Weekday, T) U) weekdayMapOf[U] {
+	var r weekdayMapOf[U]
 	for i, x := range xs {
 		r[i] = fn(time.Weekday(i), x)
 	}
 	return r
 }
 
-// weekdayFilterMap converts WeekdayMapOf[T] into []U where fn(T) returns (U, true).
-func weekdayFilterMap[T, U any](xs WeekdayMapOf[T], fn func(time.Weekday, T) (U, bool)) []U {
+// weekdayFilterMap converts weekdayMapOf[T] into []U where fn(T) returns (U, true).
+func weekdayFilterMap[T, U any](xs weekdayMapOf[T], fn func(time.Weekday, T) (U, bool)) []U {
 	var r []U
 	for i, x := range xs {
 		if u, ok := fn(time.Weekday(i), x); ok {
@@ -1020,7 +1020,7 @@ func weekdayFilterMap[T, U any](xs WeekdayMapOf[T], fn func(time.Weekday, T) (U,
 // weekdayGroupInvertIf returns r such that r[k][weekday] iff fn(wd, k) and
 // m[weekday] == k. Note that this means that r[k][weekday] will only be true
 // for a single k.
-func weekdayGroupInvertIf[T comparable](m WeekdayMapOf[T], fn func(time.Weekday, T) bool) map[T][7]bool {
+func weekdayGroupInvertIf[T comparable](m weekdayMapOf[T], fn func(time.Weekday, T) bool) map[T][7]bool {
 	r := map[T][7]bool{}
 	for i, k := range m {
 		if fn(time.Weekday(i), k) {

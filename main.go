@@ -719,6 +719,12 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, ak.StartTime.WithDate(ai.Date).In(tz).Format("20060102T150405")) // local
 				fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, ai.EndTime.WithDate(ai.Date).In(tz).Format("20060102T150405"))     // local
 
+				// write custom props
+				fmt.Fprintf(&ical, "X-FUSION-ACTIVITY-ID:%s\r\n", icalTextEscape.Replace(ak.ActivityID))
+				for i := range ai.Categories {
+					fmt.Fprintf(&ical, "X-FUSION-CATEGORY;X-FUSION-CATEGORY-ID=%s:%s\r\n", ai.CategoryIDs[i], icalTextEscape.Replace(ai.Categories[i]))
+				}
+
 				// write recurrence info if it's a recurring event
 				if recur != nil {
 					if base {

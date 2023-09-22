@@ -138,7 +138,12 @@ func main() {
 func handle(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimLeft(path.Clean(r.URL.Path), "/")
 
-	if !strings.ContainsRune(p, '/') && p != "favicon.ico" || !strings.HasPrefix(p, ".") {
+	if p == "favicon.ico" {
+		handleFavicon(w, r)
+		return
+	}
+
+	if !strings.ContainsRune(p, '/') || !strings.HasPrefix(p, ".") {
 		if instance, ext, _ := strings.Cut(p, "."); instance != "" {
 			ext = strings.ToLower(ext)
 			if instance, _ := strings.CutPrefix(instance, "school"); instance != "" {
@@ -211,6 +216,16 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+}
+
+//go:embed favicon.ico
+var favicon []byte
+
+func handleFavicon(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "image/x-icon")
+	w.Header().Set("Content-Length", strconv.Itoa(len(favicon)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(favicon)
 }
 
 //go:embed calendar.html

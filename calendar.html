@@ -178,290 +178,296 @@
     <script src="https://unpkg.com/@fullcalendar/timegrid@6.1.8/index.global.min.js"></script>
     <script src="https://unpkg.com/@fullcalendar/icalendar@6.1.8/index.global.min.js"></script>
     <script>
-        const app = document.getElementById("app")
+        try {
+            const app = document.getElementById("app")
 
-        // query string handling
-        const query = app.querySelector("#query")
-        const paramsUpdated = []
-        const onParamsUpdated = fn => {
-            if (fn) {
-                paramsUpdated.push(fn)
-            }
-            fn(new URL(window.location).searchParams)
-        }
-        const updateSearch = (search = undefined) => {
-            const url = new URL(window.location)
-            if (search !== undefined) {
-                if (typeof search == "string" || search instanceof String) {
-                    if (!search.startsWith("?")) {
-                        search = "?" + search
-                    }
-                    if (search == "?") {
-                        search = ""
-                    }
-                    url.search = search
-                } else {
-                    search(url.searchParams)
+            // query string handling
+            const query = app.querySelector("#query")
+            const paramsUpdated = []
+            const onParamsUpdated = fn => {
+                if (fn) {
+                    paramsUpdated.push(fn)
                 }
-                window.history.replaceState(null, document.title, url)
-                query.value = decodeURIComponent(url.search.substring(1))
-
-                for (const fn of paramsUpdated) {
-                    fn(url.searchParams)
-                }
+                fn(new URL(window.location).searchParams)
             }
-            return url.searchParams
-        }
-        query.value = decodeURIComponent(window.location.search.substring(1))
-        query.addEventListener("input", () => updateSearch(query.value))
-
-        // options
-        for (const el of app.querySelectorAll("#opts > .opt[data-opt]")) {
-            const opt = {
-                query: el.dataset.opt,
-                name: el.dataset.optName ?? el.dataset.opt,
-                type: el.dataset.optType ?? "flag",
-                example: el.dataset.optExample ?? null,
-                doc: el.dataset.optDoc ?? null,
-            }
-            el.classList.add(`opt--${opt.type}`)
-
-            if (opt.type == "filter") {
-                const el_name = document.createElement("div")
-                el_name.classList.add("opt__name")
-                el_name.textContent = opt.name
-                el.appendChild(el_name)
-
-                if (opt.doc) {
-                    const el_doc = document.createElement("div")
-                    el_doc.classList.add("opt__doc")
-                    el_doc.textContent = opt.doc
-                    el.appendChild(el_doc)
-                }
-
-                const el_items = document.createElement("div")
-                el_items.classList.add("opt_items")
-                el.appendChild(el_items)
-
-                onParamsUpdated(params => {
-                    el_items.innerHTML = ""
-
-                    {
-                        const el_item = document.createElement("div")
-                        el_item.classList.add("opt__item")
-                        el_item.classList.add("opt__item--new")
-                        el_items.appendChild(el_item)
-
-                        const el_item_input = document.createElement("input")
-                        el_item_input.autocomplete = "off"
-                        el_item_input.autocapitalize = "off"
-                        if (opt.example) {
-                            el_item_input.placeholder = opt.example
+            const updateSearch = (search = undefined) => {
+                const url = new URL(window.location)
+                if (search !== undefined) {
+                    if (typeof search == "string" || search instanceof String) {
+                        if (!search.startsWith("?")) {
+                            search = "?" + search
                         }
-                        el_item.appendChild(el_item_input)
+                        if (search == "?") {
+                            search = ""
+                        }
+                        url.search = search
+                    } else {
+                        search(url.searchParams)
+                    }
+                    window.history.replaceState(null, document.title, url)
+                    query.value = decodeURIComponent(url.search.substring(1))
 
-                        const el_item_btn_include = document.createElement("button")
-                        el_item_btn_include.textContent = "Include"
-                        el_item.appendChild(el_item_btn_include)
+                    for (const fn of paramsUpdated) {
+                        fn(url.searchParams)
+                    }
+                }
+                return url.searchParams
+            }
+            query.value = decodeURIComponent(window.location.search.substring(1))
+            query.addEventListener("input", () => updateSearch(query.value))
 
-                        const el_item_btn_exclude = document.createElement("button")
-                        el_item_btn_exclude.textContent = "Exclude"
-                        el_item.appendChild(el_item_btn_exclude)
+            // options
+            for (const el of app.querySelectorAll("#opts > .opt[data-opt]")) {
+                const opt = {
+                    query: el.dataset.opt,
+                    name: el.dataset.optName ?? el.dataset.opt,
+                    type: el.dataset.optType ?? "flag",
+                    example: el.dataset.optExample ?? null,
+                    doc: el.dataset.optDoc ?? null,
+                }
+                el.classList.add(`opt--${opt.type}`)
 
-                        el_item_input.addEventListener("keydown", ev => {
-                            if (ev.keyCode == 13) {
+                if (opt.type == "filter") {
+                    const el_name = document.createElement("div")
+                    el_name.classList.add("opt__name")
+                    el_name.textContent = opt.name
+                    el.appendChild(el_name)
+
+                    if (opt.doc) {
+                        const el_doc = document.createElement("div")
+                        el_doc.classList.add("opt__doc")
+                        el_doc.textContent = opt.doc
+                        el.appendChild(el_doc)
+                    }
+
+                    const el_items = document.createElement("div")
+                    el_items.classList.add("opt_items")
+                    el.appendChild(el_items)
+
+                    onParamsUpdated(params => {
+                        el_items.innerHTML = ""
+
+                        {
+                            const el_item = document.createElement("div")
+                            el_item.classList.add("opt__item")
+                            el_item.classList.add("opt__item--new")
+                            el_items.appendChild(el_item)
+
+                            const el_item_input = document.createElement("input")
+                            el_item_input.autocomplete = "off"
+                            el_item_input.autocapitalize = "off"
+                            if (opt.example) {
+                                el_item_input.placeholder = opt.example
+                            }
+                            el_item.appendChild(el_item_input)
+
+                            const el_item_btn_include = document.createElement("button")
+                            el_item_btn_include.textContent = "Include"
+                            el_item.appendChild(el_item_btn_include)
+
+                            const el_item_btn_exclude = document.createElement("button")
+                            el_item_btn_exclude.textContent = "Exclude"
+                            el_item.appendChild(el_item_btn_exclude)
+
+                            el_item_input.addEventListener("keydown", ev => {
+                                if (ev.keyCode == 13) {
+                                    updateSearch(params => {
+                                        const flt = el_item_input.value.trim()
+                                        if (!params.getAll(opt.query).includes(flt)) {
+                                            params.append(opt.query, flt)
+                                        }
+                                        el_item_input.value = ""
+                                    })
+                                }
+                            })
+
+                            el_item_btn_include.addEventListener("click", () => {
                                 updateSearch(params => {
-                                    const flt = el_item_input.value.trim()
+                                    const flt = el_item_input.value.trim().replace(/^-/, "")
                                     if (!params.getAll(opt.query).includes(flt)) {
                                         params.append(opt.query, flt)
                                     }
                                     el_item_input.value = ""
                                 })
-                            }
-                        })
-
-                        el_item_btn_include.addEventListener("click", () => {
-                            updateSearch(params => {
-                                const flt = el_item_input.value.trim().replace(/^-/, "")
-                                if (!params.getAll(opt.query).includes(flt)) {
-                                    params.append(opt.query, flt)
-                                }
-                                el_item_input.value = ""
                             })
-                        })
 
-                        el_item_btn_exclude.addEventListener("click", () => {
-                            updateSearch(params => {
-                                const flt = "-" + el_item_input.value.trim().replace(/^-/, "")
-                                if (!params.getAll(opt.query).includes(flt)) {
-                                    params.append(opt.query, flt)
-                                }
-                                el_item_input.value = ""
+                            el_item_btn_exclude.addEventListener("click", () => {
+                                updateSearch(params => {
+                                    const flt = "-" + el_item_input.value.trim().replace(/^-/, "")
+                                    if (!params.getAll(opt.query).includes(flt)) {
+                                        params.append(opt.query, flt)
+                                    }
+                                    el_item_input.value = ""
+                                })
                             })
-                        })
-                    }
+                        }
 
-                    for (const item of params.getAll(opt.query)) {
-                        const el_item = document.createElement("div")
-                        el_item.classList.add("opt__item")
-                        el_items.appendChild(el_item)
+                        for (const item of params.getAll(opt.query)) {
+                            const el_item = document.createElement("div")
+                            el_item.classList.add("opt__item")
+                            el_items.appendChild(el_item)
 
-                        const el_item_input = document.createElement("input")
-                        el_item_input.value = item
-                        el_item_input.disabled = true
-                        el_item_input.autocomplete = "off"
-                        el_item_input.autocapitalize = "off"
-                        el_item.appendChild(el_item_input)
+                            const el_item_input = document.createElement("input")
+                            el_item_input.value = item
+                            el_item_input.disabled = true
+                            el_item_input.autocomplete = "off"
+                            el_item_input.autocapitalize = "off"
+                            el_item.appendChild(el_item_input)
 
-                        const el_item_btn_remove = document.createElement("button")
-                        el_item_btn_remove.textContent = "x"
-                        el_item.appendChild(el_item_btn_remove)
+                            const el_item_btn_remove = document.createElement("button")
+                            el_item_btn_remove.textContent = "x"
+                            el_item.appendChild(el_item_btn_remove)
 
-                        el_item_btn_remove.addEventListener("click", () => {
-                            updateSearch(params => {
-                                params.delete(opt.query, el_item_input.value)
+                            el_item_btn_remove.addEventListener("click", () => {
+                                updateSearch(params => {
+                                    params.delete(opt.query, el_item_input.value)
+                                })
                             })
-                        })
-                    }
-                })
-
-                continue
-            }
-
-            if (opt.type == "flag") {
-                const el_label = document.createElement("label")
-                el_label.htmlFor = `val_${opt.query}`
-                el.appendChild(el_label)
-
-                const el_cb = document.createElement("input")
-                el_cb.classList.add("opt__cb")
-                el_cb.id = `val_${opt.query}`
-                el_cb.autocomplete = "off"
-                el_cb.type = "checkbox"
-                el_cb.name = opt.query
-                el_label.appendChild(el_cb)
-
-                const el_name = document.createElement("div")
-                el_name.classList.add("opt__name")
-                el_name.textContent = opt.name
-                el_label.appendChild(el_name)
-
-                if (opt.doc) {
-                    const el_doc = document.createElement("div")
-                    el_doc.classList.add("opt__doc")
-                    el_doc.textContent = opt.doc
-                    el_label.appendChild(el_doc)
-                }
-
-                onParamsUpdated(params => {
-                    el_cb.checked = params.has(opt.query)
-                })
-
-                el_cb.addEventListener("input", () => {
-                    updateSearch(params => {
-                        if (el_cb.checked) {
-                            params.set(opt.query, "1")
-                        } else {
-                            params.delete(opt.query)
                         }
                     })
-                })
 
-                continue
+                    continue
+                }
+
+                if (opt.type == "flag") {
+                    const el_label = document.createElement("label")
+                    el_label.htmlFor = `val_${opt.query}`
+                    el.appendChild(el_label)
+
+                    const el_cb = document.createElement("input")
+                    el_cb.classList.add("opt__cb")
+                    el_cb.id = `val_${opt.query}`
+                    el_cb.autocomplete = "off"
+                    el_cb.type = "checkbox"
+                    el_cb.name = opt.query
+                    el_label.appendChild(el_cb)
+
+                    const el_name = document.createElement("div")
+                    el_name.classList.add("opt__name")
+                    el_name.textContent = opt.name
+                    el_label.appendChild(el_name)
+
+                    if (opt.doc) {
+                        const el_doc = document.createElement("div")
+                        el_doc.classList.add("opt__doc")
+                        el_doc.textContent = opt.doc
+                        el_label.appendChild(el_doc)
+                    }
+
+                    onParamsUpdated(params => {
+                        el_cb.checked = params.has(opt.query)
+                    })
+
+                    el_cb.addEventListener("input", () => {
+                        updateSearch(params => {
+                            if (el_cb.checked) {
+                                params.set(opt.query, "1")
+                            } else {
+                                params.delete(opt.query)
+                            }
+                        })
+                    })
+
+                    continue
+                }
+
+                throw new TypeError(`Invalid option type ${opt.type} for option ${opt.query}`)
             }
 
-            throw new TypeError(`Invalid option type ${opt.type} for option ${opt.query}`)
-        }
+            const icsURL = () => {
+                const url = new URL(window.location)
+                url.hash = ""
+                url.pathname = url.pathname.replace(/\.html$/, "") + ".ics"
+                return url.toString()
+            }
 
-        const icsURL = () => {
-            const url = new URL(window.location)
-            url.hash = ""
-            url.pathname = url.pathname.replace(/\.html$/, "") + ".ics"
-            return url.toString()
-        }
-
-        const btn_opts = app.querySelector("#btn_opts")
-        btn_opts.addEventListener("click", () => {
-            app.classList.toggle("app--opts-expanded")
-        })
-
-        const btn_ics = app.querySelector("#btn_ics")
-        btn_ics.addEventListener("click", () => {
-            prompt("Subscribe to the following link in your calendar application.", icsURL())
-        })
-
-        const errorEl = app.querySelector("#error")
-        const calendar = new FullCalendar.Calendar(app.querySelector("#calendar").appendChild(document.createElement("div")), {
-            initialView: "listWeek",
-            height: "100%",
-            headerToolbar: {
-                left: "prev,next",
-                center: "title",
-                right: "listWeek,timeGridWeek",
-            },
-            eventContent(arg, createElement) {
-                const domNodes = []
-
-                if (arg.event.title) {
-                    const el = document.createElement("b")
-                    el.textContent = arg.event.title
-                    domNodes.push(el)
-                }
-                if (arg.event.extendedProps.location) {
-                    if (arg.view.type == "timeGridWeek") {
-                        domNodes.push(document.createElement("br"))
-                    } else {
-                        const el = document.createElement("span")
-                        el.textContent = " \u00b7 "
-                        domNodes.push(el)
-                    }
-                    const el = document.createElement("span")
-                    el.textContent = arg.event.extendedProps.location
-                    domNodes.push(el)
-                }
-                if (arg.event.extendedProps.description) {
-                    if (arg.view.type == "timeGridWeek") {
-                        domNodes.push(document.createElement("br"))
-                    } else {
-                        const el = document.createElement("span")
-                        el.textContent = " \u00b7 "
-                        domNodes.push(el)
-                    }
-                    const el = document.createElement("i")
-                    el.style.whiteSpace = "pre-wrap"
-                    el.textContent = arg.event.extendedProps.description
-                    domNodes.push(el)
-                }
-
-                return { domNodes }
-            },
-            eventSourceSuccess() {
-                errorEl.hidden = true
-            },
-            eventSourceFailure(error) {
-                errorEl.textContent = `${error}`
-                errorEl.hidden = false
-            },
-        })
-        calendar.render()
-
-        const reload = () => {
-            calendar.getEventSources().forEach(x => x.remove())
-            calendar.addEventSource({
-                url: icsURL(),
-                format: `ics`,
+            const btn_opts = app.querySelector("#btn_opts")
+            btn_opts.addEventListener("click", () => {
+                app.classList.toggle("app--opts-expanded")
             })
-        }
 
-        let debounce
-        onParamsUpdated(params => {
-            if (debounce !== undefined) {
-                window.clearTimeout(debounce)
-                debounce = window.setTimeout(() => reload(), 250)
-            } else {
-                debounce = window.setTimeout(() => reload(), 1)
+            const btn_ics = app.querySelector("#btn_ics")
+            btn_ics.addEventListener("click", () => {
+                prompt("Subscribe to the following link in your calendar application.", icsURL())
+            })
+
+            const errorEl = app.querySelector("#error")
+            const calendar = new FullCalendar.Calendar(app.querySelector("#calendar").appendChild(document.createElement("div")), {
+                initialView: "listWeek",
+                height: "100%",
+                headerToolbar: {
+                    left: "prev,next",
+                    center: "title",
+                    right: "listWeek,timeGridWeek",
+                },
+                eventContent(arg, createElement) {
+                    const domNodes = []
+
+                    if (arg.event.title) {
+                        const el = document.createElement("b")
+                        el.textContent = arg.event.title
+                        domNodes.push(el)
+                    }
+                    if (arg.event.extendedProps.location) {
+                        if (arg.view.type == "timeGridWeek") {
+                            domNodes.push(document.createElement("br"))
+                        } else {
+                            const el = document.createElement("span")
+                            el.textContent = " \u00b7 "
+                            domNodes.push(el)
+                        }
+                        const el = document.createElement("span")
+                        el.textContent = arg.event.extendedProps.location
+                        domNodes.push(el)
+                    }
+                    if (arg.event.extendedProps.description) {
+                        if (arg.view.type == "timeGridWeek") {
+                            domNodes.push(document.createElement("br"))
+                        } else {
+                            const el = document.createElement("span")
+                            el.textContent = " \u00b7 "
+                            domNodes.push(el)
+                        }
+                        const el = document.createElement("i")
+                        el.style.whiteSpace = "pre-wrap"
+                        el.textContent = arg.event.extendedProps.description
+                        domNodes.push(el)
+                    }
+
+                    return { domNodes }
+                },
+                eventSourceSuccess() {
+                    errorEl.hidden = true
+                },
+                eventSourceFailure(error) {
+                    errorEl.textContent = `${error}`
+                    errorEl.hidden = false
+                },
+            })
+            calendar.render()
+
+            const reload = () => {
+                calendar.getEventSources().forEach(x => x.remove())
+                calendar.addEventSource({
+                    url: icsURL(),
+                    format: `ics`,
+                })
             }
-        })
+
+            let debounce
+            onParamsUpdated(params => {
+                if (debounce !== undefined) {
+                    window.clearTimeout(debounce)
+                    debounce = window.setTimeout(() => reload(), 250)
+                } else {
+                    debounce = window.setTimeout(() => reload(), 1)
+                }
+            })
+        } catch (ex) {
+            const errorEl = document.getElementById("error")
+            errorEl.hidden = false
+            errorEl.textContent = `${ex}`
+        }
     </script>
 </body>
 </html>

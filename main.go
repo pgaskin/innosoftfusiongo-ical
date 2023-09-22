@@ -286,7 +286,10 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		return
 	}
 
+	generateStart := time.Now()
 	buf := generateCalendar(&opt)
+	w.Header().Set("X-Generate-Time", strconv.FormatFloat(time.Since(generateStart).Seconds(), 'f', -1, 64))
+
 	if r.Header.Get("Sec-Fetch-Dest") != "document" {
 		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
 	} else {

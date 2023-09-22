@@ -24,8 +24,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/pgaskin/innosoftfusiongo-ical/fusiongo"
+	"github.com/pgaskin/innosoftfusiongo-ical/vtimezone"
 )
 
 const EnvPrefix = "IFGICAL"
@@ -40,10 +42,17 @@ var (
 	ProxyHeader       = flag.String("proxy-header", "", "Trusted header containing the remote address (e.g., X-Forwarded-For)")
 	InstanceWhitelist = flag.String("instance-whitelist", "", "Comma-separated whitelist of Innosoft Fusion Go instances to get data from")
 	Testdata          = flag.String("testdata", "", "Path to directory containing school%d/*.json files to test with")
+	Timezone          = flag_TimezoneMap("timezone", MustParseTimezoneMap("UTC,110=America/Toronto"), "Default timezone name, plus optional comma-separated schoolID=timezone pairs.")
 )
 
 func flag_Level(name string, value slog.Level, usage string) *slog.Level {
 	v := new(slog.Level)
+	flag.TextVar(v, name, value, usage)
+	return v
+}
+
+func flag_TimezoneMap(name string, value TimezoneMap, usage string) *TimezoneMap {
+	v := new(TimezoneMap)
 	flag.TextVar(v, name, value, usage)
 	return v
 }
@@ -71,6 +80,14 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "extra arguments %q provided\n", flag.Args())
 		flag.CommandLine.Usage()
 		os.Exit(2)
+	}
+
+	// ensure timezones are usable
+	for _, tz := range *Timezone {
+		if _, err := vtimezone.AppendRRULE(nil, tz); err != nil {
+			fmt.Fprintf(flag.CommandLine.Output(), "cannot use timezone %s: %v\n", tz, err)
+			os.Exit(2)
+		}
 	}
 
 	// setup slog if required
@@ -442,6 +459,12 @@ type generateCalendarOptions struct {
 type generateCalendarFunc func(*generateCalendarOptions) []byte
 
 func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, error) {
+	tz, _ := Timezone.Get(schoolID)
+
+	tzVTimezone, err := vtimezone.AppendRRULE(nil, tz)
+	if err != nil {
+		return nil, fmt.Errorf("cannot convert timezone %s to vtimezone: %w", tz, err)
+	}
 
 	// load schedule
 	var schedule *fusiongo.Schedule
@@ -644,6 +667,12 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			fmt.Fprintf(&ical, "COLOR:%s\r\n", calColor)
 		}
 
+		// write timezone info
+		//  - most clients will fall back to parsing the times as floating times if they have trouble handling this
+		//  - ICSx5/iCal4j currently freaks out if this isn't exactly how it expects it to be, resulting in all events being put as 0 minutes at 11pm!?!
+		//  - for best compatibility, should stick to a simple standard or standard+daylight rrule-based vtimezone
+		ical.Write(tzVTimezone)
+
 		// write activities
 		for _, ak := range activityKeys {
 			if _, include := activityFilter[ak]; !include {
@@ -785,7 +814,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				// write event info
 				fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
 				fmt.Fprintf(&ical, "UID:%s\r\n", uid)
-				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", icalDateTimeUTC(fusiongo.GoDateTime(schedule.Updated.UTC()))) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
+				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", icalDateTimeUTC(fusiongo.GoDateTime(schedule.Updated.UTC()))) // utc; this should be when the event was created, but unfortunately, we can't determine that deterministically, so just use the schedule update time
 
 				// write event status information if it's the only event or a recurrence exception
 				if recur == nil || !base {
@@ -804,8 +833,8 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				// write more event info
 				fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape(ak.Location))
 				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape(ai.Description+excDesc.String()))
-				fmt.Fprintf(&ical, "DTSTART:%s\r\n", icalDateTimeLocal(ak.StartTime.WithDate(ai.Date)))                         // local
-				fmt.Fprintf(&ical, "DTEND:%s\r\n", icalDateTimeLocal(ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End())) // local
+				fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, icalDateTimeLocal(ak.StartTime.WithDate(ai.Date)))
+				fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, icalDateTimeLocal(ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End()))
 
 				// write custom props
 				fmt.Fprintf(&ical, "X-FUSION-ACTIVITY-ID:%s\r\n", icalTextEscape(ak.ActivityID))
@@ -816,14 +845,14 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				// write recurrence info if it's a recurring event
 				if recur != nil {
 					if base {
-						fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", icalDateTimeLocal(ak.StartTime.WithEnd(aiLast.EndTime).WithDate(aiLast.Date).End()), strings.Join(akDays, ",")) // local if dtstart is local, else utc
+						fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", icalDateTimeUTC(fusiongo.GoDateTime(ak.StartTime.WithEnd(aiLast.EndTime).WithDate(aiLast.Date).End().In(time.Local).UTC())), strings.Join(akDays, ","))
 						recur(func(d fusiongo.Date, _ bool, i int) {
 							if i == -1 || !activityFilter[ak][i] {
-								fmt.Fprintf(&ical, "EXDATE:%s\r\n", icalDateTimeLocal(ak.StartTime.WithDate(d)))
+								fmt.Fprintf(&ical, "EXDATE;TZID=%s:%s\r\n", tz, icalDateTimeLocal(ak.StartTime.WithDate(d)))
 							}
 						})
 					} else {
-						fmt.Fprintf(&ical, "RECURRENCE-ID:%s\r\n", icalDateTimeLocal(ak.StartTime.WithDate(ai.Date))) // local
+						fmt.Fprintf(&ical, "RECURRENCE-ID;TZID=%s:%s\r\n", tz, icalDateTimeLocal(ak.StartTime.WithDate(ai.Date)))
 					}
 				}
 
@@ -1063,6 +1092,96 @@ func mostCommonBy[T comparable, V any](vs []V, fn func(V) T) (value T) {
 		xs = append(xs, fn(v))
 	}
 	return mostCommon(xs)
+}
+
+// TimezoneMap maps school IDs to timezones.
+type TimezoneMap map[int]*time.Location
+
+func MustParseTimezoneMap(s string) TimezoneMap {
+	m := make(TimezoneMap)
+	if err := m.UnmarshalText([]byte(s)); err != nil {
+		panic(err)
+	}
+	return m
+}
+
+// Default gets the default timezone, or time.UTC if none was set. It will
+// never return nil.
+func (t TimezoneMap) Default() *time.Location {
+	if t != nil {
+		if loc := t[0]; loc != nil {
+			return loc
+		}
+	}
+	return time.UTC
+}
+
+// Get gets the timezone for id. It will never return nil.
+func (t TimezoneMap) Get(id int) (*time.Location, bool) {
+	if t == nil {
+		return t.Default(), false
+	}
+	loc, ok := t[id]
+	if !ok {
+		loc = t.Default()
+	}
+	return loc, ok
+}
+
+// UnmarshalText parses the default timezone followed by zero or more
+// comma-separated id=timezone pairs.
+func (t TimezoneMap) UnmarshalText(b []byte) error {
+	def, rest, _ := strings.Cut(string(b), ",")
+
+	loc, err := time.LoadLocation(def)
+	if err != nil {
+		return fmt.Errorf("load default timezone %q: %w", def, err)
+	}
+	t[0] = loc
+
+	var val string
+	for rest != "" {
+		val, rest, _ = strings.Cut(rest, ",")
+		idS, tz, ok := strings.Cut(val, "=")
+		if !ok {
+			return fmt.Errorf("parse id=timezone pair %q: missing =", val)
+		}
+		id, err := strconv.ParseInt(idS, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse id=timezone pair %q: invalid id %q: %w", val, idS, err)
+		}
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			return fmt.Errorf("parse id=timezone pair %q: load timezone %q: %w", val, tz, err)
+		}
+		t[int(id)] = loc
+	}
+	return nil
+}
+
+// MarshalText is the opposite of UnmarshalText, but will sort the values.
+func (t TimezoneMap) MarshalText() ([]byte, error) {
+	if t == nil {
+		return []byte(t.Default().String()), nil
+	}
+
+	ids := make([]int, 0, len(t))
+	for id := range t {
+		if id != 0 {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+
+	var b []byte
+	b = append(b, t.Default().String()...)
+	for _, id := range ids {
+		b = append(b, ',')
+		b = strconv.AppendInt(b, int64(id), 10)
+		b = append(b, '=')
+		b = append(b, t[id].String()...)
+	}
+	return b, nil
 }
 
 // icalTextEscape escapes a string for use as an iCalendar value.

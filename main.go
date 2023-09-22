@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -38,6 +39,7 @@ var (
 	Timeout           = flag.Duration("timeout", time.Second*5, "Timeout for fetching Innosoft Fusion Go data")
 	ProxyHeader       = flag.String("proxy-header", "", "Trusted header containing the remote address (e.g., X-Forwarded-For)")
 	InstanceWhitelist = flag.String("instance-whitelist", "", "Comma-separated whitelist of Innosoft Fusion Go instances to get data from")
+	Testdata          = flag.String("testdata", "", "Path to directory containing school%d/*.json files to test with")
 )
 
 func flag_Level(name string, value slog.Level, usage string) *slog.Level {
@@ -442,15 +444,35 @@ type generateCalendarFunc func(*generateCalendarOptions) []byte
 func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, error) {
 
 	// load schedule
-	schedule, err := fusiongo.FetchSchedule(ctx, schoolID)
-	if err != nil {
+	var schedule *fusiongo.Schedule
+	if *Testdata != "" {
+		if buf, err := os.ReadFile(filepath.Join(*Testdata, "school"+strconv.Itoa(schoolID), "schedule.json")); err != nil {
+			return nil, fmt.Errorf("load schedule: %w", err)
+		} else if v, err := fusiongo.ParseSchedule(buf); err != nil {
+			return nil, fmt.Errorf("load schedule: %w", err)
+		} else {
+			schedule = v
+		}
+	} else if v, err := fusiongo.FetchSchedule(ctx, schoolID); err != nil {
 		return nil, fmt.Errorf("load schedule: %w", err)
+	} else {
+		schedule = v
 	}
 
 	// load notifications
-	notifications, err := fusiongo.FetchNotifications(ctx, schoolID)
-	if err != nil {
+	var notifications *fusiongo.Notifications
+	if *Testdata != "" {
+		if buf, err := os.ReadFile(filepath.Join(*Testdata, "school"+strconv.Itoa(schoolID), "notifications.json")); err != nil {
+			return nil, fmt.Errorf("load notifications: %w", err)
+		} else if v, err := fusiongo.ParseNotifications(buf); err != nil {
+			return nil, fmt.Errorf("load notifications: %w", err)
+		} else {
+			notifications = v
+		}
+	} else if v, err := fusiongo.FetchNotifications(ctx, schoolID); err != nil {
 		return nil, fmt.Errorf("load notifications: %w", err)
+	} else {
+		notifications = v
 	}
 
 	// do some cleanup

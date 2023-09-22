@@ -466,18 +466,6 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		notifications.Notifications[ni].Text = strings.TrimSpace(n.Text)
 	}
 
-	// get calendar boundaries
-	var calStart, calEnd time.Time
-	if len(schedule.Activities) != 0 {
-		calStart, calEnd = expandRange(schedule.Activities, func(v fusiongo.ActivityInstance) (time.Time, time.Time) {
-			return v.Time.In(tz)
-		}, func(a, b time.Time) bool {
-			return a.Before(b)
-		})
-	} else {
-		calStart, calEnd = time.Now().In(tz), time.Now().In(tz)
-	}
-
 	// check some basic assumptions
 	// - we depend (for correctness, not code) on the fact that an activity is uniquely identified by its id and location and can only occur once per start time per day
 	// - we also depend on each activity having at least one category (this should always be true)
@@ -639,28 +627,6 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			fmt.Fprintf(&ical, "COLOR:%s\r\n", calColor)
 		}
 
-		// write timezone info
-		fmt.Fprintf(&ical, "BEGIN:VTIMEZONE\r\n")
-		fmt.Fprintf(&ical, "TZID:%s\r\n", tz)
-		for start, end := calStart.ZoneBounds(); !start.After(calEnd.AddDate(1, 0, 0)); start, end = end.ZoneBounds() {
-			var tztype string
-			if start.IsDST() {
-				tztype = "DAYLIGHT"
-			} else {
-				tztype = "STANDARD"
-			}
-			fmt.Fprintf(&ical, "BEGIN:%s\r\n", tztype)
-			fmt.Fprintf(&ical, "TZNAME:%s\r\n", start.Format("MST"))
-			fmt.Fprintf(&ical, "DTSTART:%s\r\n", start.Format(icalDateTimeLocal)) // local
-			fmt.Fprintf(&ical, "TZOFFSETFROM:%s\r\n", start.AddDate(0, 0, -1).Format(icalTZOffset))
-			fmt.Fprintf(&ical, "TZOFFSETTO:%s\r\n", start.Format(icalTZOffset))
-			fmt.Fprintf(&ical, "END:%s\r\n", tztype)
-			if end.IsZero() {
-				break
-			}
-		}
-		fmt.Fprintf(&ical, "END:VTIMEZONE\r\n")
-
 		// write activities
 		for _, ak := range activityKeys {
 			if _, include := activityFilter[ak]; !include {
@@ -804,8 +770,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				// write event info
 				fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
 				fmt.Fprintf(&ical, "UID:%s\r\n", uid)
-				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format(icalDateTimeUTC))       // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
-				fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", schedule.Updated.UTC().Format(icalDateTimeUTC)) // utc
+				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format(icalDateTimeUTC)) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
 
 				// write event status information if it's the only event or a recurrence exception
 				if recur == nil || !base {
@@ -824,8 +789,8 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				// write more event info
 				fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape(ak.Location))
 				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape(ai.Description+excDesc.String()))
-				fmt.Fprintf(&ical, "DTSTART;TZID=%s:%s\r\n", tz, ak.StartTime.WithDate(ai.Date).In(tz).Format(icalDateTimeLocal)) // local
-				fmt.Fprintf(&ical, "DTEND;TZID=%s:%s\r\n", tz, ai.EndTime.WithDate(ai.Date).In(tz).Format(icalDateTimeLocal))     // local
+				fmt.Fprintf(&ical, "DTSTART:%s\r\n", ak.StartTime.WithDate(ai.Date).In(tz).Format(icalDateTimeLocal))                      // local
+				fmt.Fprintf(&ical, "DTEND:%s\r\n", ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).EndIn(tz).Format(icalDateTimeLocal)) // local
 
 				// write custom props
 				fmt.Fprintf(&ical, "X-FUSION-ACTIVITY-ID:%s\r\n", icalTextEscape(ak.ActivityID))
@@ -836,14 +801,14 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				// write recurrence info if it's a recurring event
 				if recur != nil {
 					if base {
-						fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", ai.EndTime.WithDate(aiLast.Date).In(tz).Format(icalDateTimeLocal), strings.Join(akDays, ",")) // local if dtstart is local, else utc
+						fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", ak.StartTime.WithEnd(ai.EndTime).WithDate(aiLast.Date).EndIn(tz).Format(icalDateTimeLocal), strings.Join(akDays, ",")) // local if dtstart is local, else utc
 						recur(func(d fusiongo.Date, _ bool, i int) {
 							if i == -1 || !activityFilter[ak][i] {
-								fmt.Fprintf(&ical, "EXDATE;TZID=%s:%s\r\n", tz, ak.StartTime.WithDate(d).In(tz).Format(icalDateTimeLocal))
+								fmt.Fprintf(&ical, "EXDATE:%s\r\n", ak.StartTime.WithDate(d).In(tz).Format(icalDateTimeLocal))
 							}
 						})
 					} else {
-						fmt.Fprintf(&ical, "RECURRENCE-ID;TZID=%s:%s\r\n", tz, ak.StartTime.WithDate(ai.Date).In(tz).Format(icalDateTimeLocal)) // local
+						fmt.Fprintf(&ical, "RECURRENCE-ID:%s\r\n", ak.StartTime.WithDate(ai.Date).In(tz).Format(icalDateTimeLocal)) // local
 					}
 				}
 
@@ -881,7 +846,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", notifications.Updated.UTC().Format(icalDateTimeUTC)) // utc
 				fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape(n.Text))
 				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape(n.Text))
-				fmt.Fprintf(&ical, "DTSTART;VALUE=DATE;TZID=%s:%s\r\n", tz, n.Sent.In(tz).Format(icalDate)) // local
+				fmt.Fprintf(&ical, "DTSTART;VALUE=DATE:%s\r\n", n.Sent.In(tz).Format(icalDate)) // local
 				fmt.Fprintf(&ical, "END:VEVENT\r\n")
 			}
 		}

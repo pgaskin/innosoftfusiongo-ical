@@ -203,6 +203,14 @@ func (v Time) WithDate(d Date) DateTime {
 	return DateTime{d, v}
 }
 
+func (v Time) WithStart(t Time) TimeRange {
+	return TimeRange{t, v}
+}
+
+func (v Time) WithEnd(t Time) TimeRange {
+	return TimeRange{v, t}
+}
+
 func (v Time) Less(x Time) bool {
 	if v.Hour == x.Hour {
 		if v.Minute == x.Minute {

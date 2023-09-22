@@ -440,11 +440,6 @@ type generateCalendarOptions struct {
 type generateCalendarFunc func(*generateCalendarOptions) []byte
 
 func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, error) {
-	// get the schedule timezone
-	tz, err := time.LoadLocation("America/Toronto")
-	if err != nil {
-		return nil, fmt.Errorf("load timezone: %w", err)
-	}
 
 	// load schedule
 	schedule, err := fusiongo.FetchSchedule(ctx, schoolID)
@@ -471,7 +466,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 	// - we also depend on each activity having at least one category (this should always be true)
 	activityInstancesCheck := map[string]fusiongo.ActivityInstance{}
 	for ai, a := range schedule.Activities {
-		iid := fmt.Sprint(a.ActivityID, a.Location, a.Time.Date, a.Time.Start)
+		iid := fmt.Sprint(a.ActivityID, a.Location, a.Time.Date, a.Time.TimeRange.Start)
 		if x, ok := activityInstancesCheck[iid]; !ok {
 			activityInstancesCheck[iid] = a
 		} else if !reflect.DeepEqual(a, x) {
@@ -503,7 +498,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 	activities := mapGroupByInto(schedule.Activities, func(ai int, a fusiongo.ActivityInstance) (ActivityKey, ActivityInstance) {
 		activityKey := ActivityKey{
 			ActivityID: a.ActivityID,
-			StartTime:  a.Time.Start,
+			StartTime:  a.Time.TimeRange.Start,
 			Location:   a.Location,
 		}
 		activityInstance := ActivityInstance{
@@ -511,7 +506,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 			Activity:    a.Activity,
 			Description: a.Description,
 			Date:        a.Time.Date,
-			EndTime:     a.Time.End,
+			EndTime:     a.Time.TimeRange.End,
 			Categories:  schedule.Categories[ai].Category,
 			CategoryIDs: schedule.Categories[ai].CategoryID,
 		}
@@ -525,7 +520,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 
 			// group the activities by their weekday
 			actByWeekday := weekdayGroupBy(activityInstances, func(i int, ai ActivityInstance) time.Weekday {
-				return ai.Date.WithTime(activityKey.StartTime).In(tz).Weekday()
+				return ai.Date.WithTime(activityKey.StartTime).Weekday()
 			})
 
 			// get the most common end time for each weekday
@@ -622,7 +617,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 		fmt.Fprintf(&ical, "X-WR-CALNAME:%s\r\n", icalTextEscape(calName))
 		fmt.Fprintf(&ical, "REFRESH-INTERVAL;VALUE=DURATION:PT60M\r\n")
 		fmt.Fprintf(&ical, "X-PUBLISHED-TTL:PT60M\r\n")
-		fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", time.Now().UTC().Format(icalDateTimeUTC))
+		fmt.Fprintf(&ical, "LAST-MODIFIED:%s\r\n", icalDateTimeUTC(fusiongo.GoDateTime(time.Now().UTC())))
 		if calColor != "" {
 			fmt.Fprintf(&ical, "COLOR:%s\r\n", calColor)
 		}
@@ -678,17 +673,15 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 
 				// set the recurrence function
 				recur = func(fn func(d fusiongo.Date, ex bool, i int)) {
-					for d := aiBase.Date.In(tz); !aiLast.Date.In(tz).Before(d); d = d.AddDate(0, 0, 1) {
+					for d := aiBase.Date; !aiLast.Date.Less(d); d = d.AddDays(1) {
 						if ak.Weekday[d.Weekday()] {
-							dy, dm, dd := d.Date()
-							df := fusiongo.Date{Year: dy, Month: dm, Day: dd}
 							if i := slices.IndexFunc(ais, func(activityInstance ActivityInstance) bool {
-								return activityInstance.Date == df
+								return activityInstance.Date == d
 							}); i != -1 {
 								ai := ais[i]
-								fn(df, ai.EndTime != aiBase.EndTime || ai.Activity != aiBase.Activity || ai.Description != aiBase.Description || ai.IsCancelled, i)
+								fn(d, ai.EndTime != aiBase.EndTime || ai.Activity != aiBase.Activity || ai.Description != aiBase.Description || ai.IsCancelled, i)
 							} else {
-								fn(df, true, -1)
+								fn(d, true, -1)
 							}
 						}
 					}
@@ -751,7 +744,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 							excDesc.WriteString("\n • ")
 							excDesc.WriteString(diff)
 							excDesc.WriteString(" on ")
-							excDesc.WriteString(d.In(tz).Format("Mon Jan 02"))
+							excDesc.WriteString(fmt.Sprintf("%s %s %02d", d.Weekday().String()[:3], d.Month.String()[:3], d.Day))
 							for i, x := range diffs {
 								if i == 0 {
 									excDesc.WriteString(": ")
@@ -770,7 +763,7 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				// write event info
 				fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
 				fmt.Fprintf(&ical, "UID:%s\r\n", uid)
-				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", schedule.Updated.UTC().Format(icalDateTimeUTC)) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
+				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", icalDateTimeUTC(fusiongo.GoDateTime(schedule.Updated.UTC()))) // utc; this should be when the event was created, but unfortunately, we can'te determine that determinstically, so just use the schedule update time
 
 				// write event status information if it's the only event or a recurrence exception
 				if recur == nil || !base {
@@ -789,8 +782,8 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				// write more event info
 				fmt.Fprintf(&ical, "LOCATION:%s\r\n", icalTextEscape(ak.Location))
 				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape(ai.Description+excDesc.String()))
-				fmt.Fprintf(&ical, "DTSTART:%s\r\n", ak.StartTime.WithDate(ai.Date).In(tz).Format(icalDateTimeLocal))                      // local
-				fmt.Fprintf(&ical, "DTEND:%s\r\n", ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).EndIn(tz).Format(icalDateTimeLocal)) // local
+				fmt.Fprintf(&ical, "DTSTART:%s\r\n", icalDateTimeLocal(ak.StartTime.WithDate(ai.Date)))                         // local
+				fmt.Fprintf(&ical, "DTEND:%s\r\n", icalDateTimeLocal(ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End())) // local
 
 				// write custom props
 				fmt.Fprintf(&ical, "X-FUSION-ACTIVITY-ID:%s\r\n", icalTextEscape(ak.ActivityID))
@@ -801,14 +794,14 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				// write recurrence info if it's a recurring event
 				if recur != nil {
 					if base {
-						fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", ak.StartTime.WithEnd(ai.EndTime).WithDate(aiLast.Date).EndIn(tz).Format(icalDateTimeLocal), strings.Join(akDays, ",")) // local if dtstart is local, else utc
+						fmt.Fprintf(&ical, "RRULE:FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s\r\n", icalDateTimeLocal(ak.StartTime.WithEnd(aiLast.EndTime).WithDate(aiLast.Date).End()), strings.Join(akDays, ",")) // local if dtstart is local, else utc
 						recur(func(d fusiongo.Date, _ bool, i int) {
 							if i == -1 || !activityFilter[ak][i] {
-								fmt.Fprintf(&ical, "EXDATE:%s\r\n", ak.StartTime.WithDate(d).In(tz).Format(icalDateTimeLocal))
+								fmt.Fprintf(&ical, "EXDATE:%s\r\n", icalDateTimeLocal(ak.StartTime.WithDate(d)))
 							}
 						})
 					} else {
-						fmt.Fprintf(&ical, "RECURRENCE-ID:%s\r\n", ak.StartTime.WithDate(ai.Date).In(tz).Format(icalDateTimeLocal)) // local
+						fmt.Fprintf(&ical, "RECURRENCE-ID:%s\r\n", icalDateTimeLocal(ak.StartTime.WithDate(ai.Date))) // local
 					}
 				}
 
@@ -843,10 +836,10 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				fmt.Fprintf(&ical, "BEGIN:VEVENT\r\n")
 				fmt.Fprintf(&ical, "UID:%s\r\n", uid)
 				fmt.Fprintf(&ical, "SEQUENCE:1\r\n")
-				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", notifications.Updated.UTC().Format(icalDateTimeUTC)) // utc
+				fmt.Fprintf(&ical, "DTSTAMP:%s\r\n", icalDateTimeUTC(fusiongo.GoDateTime(notifications.Updated.UTC()))) // utc
 				fmt.Fprintf(&ical, "SUMMARY:%s\r\n", icalTextEscape(n.Text))
 				fmt.Fprintf(&ical, "DESCRIPTION:%s\r\n", icalTextEscape(n.Text))
-				fmt.Fprintf(&ical, "DTSTART;VALUE=DATE:%s\r\n", n.Sent.In(tz).Format(icalDate)) // local
+				fmt.Fprintf(&ical, "DTSTART;VALUE=DATE:%s\r\n", icalDate(n.Sent.Date)) // local
 				fmt.Fprintf(&ical, "END:VEVENT\r\n")
 			}
 		}
@@ -1050,29 +1043,6 @@ func mostCommonBy[T comparable, V any](vs []V, fn func(V) T) (value T) {
 	return mostCommon(xs)
 }
 
-// expandRange iterates over as, expanding the start and end values from fn
-// according to less.
-func expandRange[T, U any](as []T, fn func(T) (start U, end U), less func(U, U) bool) (start U, end U) {
-	for i, a := range as {
-		x, y := fn(a)
-		if i == 0 || less(x, start) {
-			start = x
-		}
-		if i == 0 || less(end, y) {
-			end = y
-		}
-	}
-	return
-}
-
-// iCalendar time formats.
-const (
-	icalDate          = "20060102"
-	icalDateTimeUTC   = "20060102T150405Z"
-	icalDateTimeLocal = "20060102T150405"
-	icalTZOffset      = "-0700"
-)
-
 // icalTextEscape escapes a string for use as an iCalendar value.
 func icalTextEscape(s string) string {
 	var b strings.Builder
@@ -1094,4 +1064,19 @@ func icalTextEscape(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// icalDate formats d as an iCalendar date.
+func icalDate(d fusiongo.Date) string {
+	return fmt.Sprintf("%04d%02d%02d", d.Year, d.Month, d.Day)
+}
+
+// icalDate formats d as an iCalendar utc date-time.
+func icalDateTimeUTC(dt fusiongo.DateTime) string {
+	return fmt.Sprintf("%04d%02d%02dT%02d%02d%02dZ", dt.Year, dt.Month, dt.Day, dt.Hour, dt.Minute, dt.Second)
+}
+
+// icalDate formats d as an iCalendar local date-time.
+func icalDateTimeLocal(dt fusiongo.DateTime) string {
+	return fmt.Sprintf("%04d%02d%02dT%02d%02d%02d", dt.Year, dt.Month, dt.Day, dt.Hour, dt.Minute, dt.Second)
 }

@@ -20,23 +20,28 @@ func (v DateTimeRange) StringCompact() string {
 	return v.Date.String() + " " + v.TimeRange.StringCompact()
 }
 
-func (v DateTimeRange) In(loc *time.Location) (start, end time.Time) {
-	start = v.Start.WithDate(v.Date).In(loc)
-	end = v.End.WithDate(v.Date).In(loc)
-	if end.Before(start) {
-		end = end.AddDate(0, 0, 1)
+func (v DateTimeRange) Range() (start, end DateTime) {
+	start = v.TimeRange.Start.WithDate(v.Date)
+	end = v.TimeRange.End.WithDate(v.Date)
+	if end.Less(start) {
+		end = end.AddDays(1)
 	}
-	return
+	return start, end
 }
 
-func (v DateTimeRange) StartIn(loc *time.Location) time.Time {
-	start, _ := v.In(loc)
+func (v DateTimeRange) Start() DateTime {
+	start, _ := v.Range()
 	return start
 }
 
-func (v DateTimeRange) EndIn(loc *time.Location) time.Time {
-	_, end := v.In(loc)
+func (v DateTimeRange) End() DateTime {
+	_, end := v.Range()
 	return end
+}
+
+func (v DateTimeRange) In(loc *time.Location) (start, end time.Time) {
+	a, b := v.Range()
+	return a.In(loc), b.In(loc)
 }
 
 func (v DateTimeRange) Less(x DateTimeRange) bool {
@@ -91,6 +96,17 @@ func ParseDateTime(s string) (datetime DateTime, ok bool) {
 	return
 }
 
+func GoDateTime(t time.Time) DateTime {
+	var (
+		y, m, d    = t.Date()
+		hh, mm, ss = t.Clock()
+	)
+	return DateTime{
+		Date: Date{y, m, d},
+		Time: Time{hh, mm, ss},
+	}
+}
+
 func (v DateTime) String() string {
 	return v.Date.String() + " " + v.Time.String()
 }
@@ -107,6 +123,11 @@ func (v DateTime) Less(x DateTime) bool {
 		return v.Time.Less(x.Time)
 	}
 	return v.Date.Less(x.Date)
+}
+
+func (v DateTime) AddDays(d int) DateTime {
+	y, m, d := civilFromDays(daysFromCivil(v.Year, v.Month, v.Day) + d)
+	return Date{y, m, d}.WithTime(v.Time)
 }
 
 // Date is a date in local time.
@@ -161,6 +182,74 @@ func (v Date) Less(x Date) bool {
 
 func (v Date) Date() (year int, month time.Month, day int) {
 	return v.Year, v.Month, v.Day
+}
+
+func (v Date) Weekday() time.Weekday {
+	// https://en.wikipedia.org/wiki/Determination_of_the_day_of_the_week#Sakamoto's_methods
+	y, m, d := v.Year, int(v.Month), v.Day
+	if y < 1752 {
+		panic("weekday: unsupported year")
+	}
+	if m < 3 {
+		y--
+	}
+	return time.Weekday((y + y/4 - y/100 + y/400 + [...]int{0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4}[m-1] + d) % 7)
+}
+
+func (v Date) AddDays(d int) Date {
+	y, m, d := civilFromDays(daysFromCivil(v.Year, v.Month, v.Day) + d)
+	return Date{y, m, d}
+}
+
+// http://howardhinnant.github.io/date_algorithms.html#days_from_civil
+func daysFromCivil(y int, m time.Month, d int) int {
+	if m < 3 {
+		y--
+	}
+	var era int
+	if y >= 0 {
+		era = y
+	} else {
+		era = y - 399
+	}
+	era /= 400
+	yoe := uint(y - era*400)
+	var doy uint
+	if m > 2 {
+		doy = uint(m) - 3
+	} else {
+		doy = uint(m) + 9
+	}
+	doy = (153*doy+2)/5 + uint(d) - 1
+	doe := yoe*365 + yoe/4 - yoe/100 + doy
+	return era*146097 + int(doe) - 719468
+}
+
+// http://howardhinnant.github.io/date_algorithms.html#civil_from_days
+func civilFromDays(z int) (y int, m time.Month, d int) {
+	z += 719468
+	var era int
+	if z >= 0 {
+		era = z
+	} else {
+		era = z - 146096
+	}
+	era /= 146097
+	doe := uint(z - era*146097)
+	yoe := (doe - doe/1460 + doe/36524 - doe/146096) / 365
+	y = int(yoe) + era*400
+	doy := doe - (365*yoe + yoe/4 - yoe/100)
+	mp := (5*doy + 2) / 153
+	d = int(doy - (153*mp+2)/5 + 1)
+	if mp < 10 {
+		m = time.Month(mp + 3)
+	} else {
+		m = time.Month(mp - 9)
+	}
+	if m < 3 {
+		y++
+	}
+	return
 }
 
 // Time is a time in local time.

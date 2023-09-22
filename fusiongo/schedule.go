@@ -208,12 +208,12 @@ func parseActivityInstance(value gjson.Result) (activity ActivityInstance, err e
 		case "location":
 			activity.Location = value.Str
 		case "startTime":
-			if activity.Time.Start, hasStartTime = ParseTime(value.Str); !hasStartTime {
+			if activity.Time.TimeRange.Start, hasStartTime = ParseTime(value.Str); !hasStartTime {
 				err = fmt.Errorf("invalid activity start time %#v", value.Value())
 				return false
 			}
 		case "endTime":
-			if activity.Time.End, hasEndTime = ParseTime(value.Str); !hasEndTime {
+			if activity.Time.TimeRange.End, hasEndTime = ParseTime(value.Str); !hasEndTime {
 				err = fmt.Errorf("invalid activity start time %#v", value.Value())
 				return false
 			}

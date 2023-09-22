@@ -34,6 +34,7 @@ var (
 	LogLevel          = flag_Level("log-level", 0, "Log level (debug/info/warn/error)")
 	LogJSON           = flag.Bool("log-json", false, "Output logs as JSON")
 	CacheTime         = flag.Duration("cache-time", time.Minute*5, "Time to cache Innosoft Fusion Go data for")
+	StaleTime         = flag.Duration("stale-time", time.Hour, "Amount of time after cache-time to continue using stale data for if the update fails")
 	Timeout           = flag.Duration("timeout", time.Second*5, "Timeout for fetching Innosoft Fusion Go data")
 	ProxyHeader       = flag.String("proxy-header", "", "Trusted header containing the remote address (e.g., X-Forwarded-For)")
 	InstanceWhitelist = flag.String("instance-whitelist", "", "Comma-separated whitelist of Innosoft Fusion Go instances to get data from")
@@ -225,11 +226,104 @@ func handleWeb(w http.ResponseWriter, _ *http.Request, _ int) {
 	w.Write(calendarHTML)
 }
 
-var (
-	cacheLock     sync.Mutex
-	cacheUpdated  = map[int]time.Time{}
-	cacheCalendar = map[int]generateCalendarFunc{}
-)
+type cacheEntry struct {
+	Mu sync.Mutex
+
+	// error info (will be cleared on success)
+	Failure time.Time // when the error happened
+	Error   error     // error details
+	ErrorN  int       // error count
+
+	// success info (will be cleared on invalidation)
+	Success  time.Time            // last time the calendar data was successfully updated
+	Calendar generateCalendarFunc // ics generate function
+}
+
+var cache sync.Map // [schoolID int]*cacheEntry
+
+// backoff returns the minimum time to try again for attempt n with the last
+// error at t.
+func backoff(t time.Time, n int) time.Time {
+	if n <= 0 {
+		return t
+	}
+	switch n {
+	case 1, 2:
+		return t.Add(time.Second)
+	case 3, 4, 5, 6:
+		return t.Add(time.Second * 15)
+	case 7, 8, 9, 10:
+		return t.Add(time.Minute)
+	default:
+		return t.Add(time.Minute * 15)
+	}
+}
+
+// getCalendarCached gets the latest generate function for schoolID. Even if it
+// returns an error, it may still return an old generateCalendarFunc if it isn't
+// too stale.
+func getCalendarCached(schoolID int) (generateCalendarFunc, error) {
+	entryV, _ := cache.LoadOrStore(schoolID, new(cacheEntry))
+	entry := entryV.(*cacheEntry)
+
+	entry.Mu.Lock()
+	defer entry.Mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), *Timeout)
+	defer cancel()
+
+	if entry.Success.IsZero() || time.Since(entry.Success) > *CacheTime {
+		if entry.Success.IsZero() {
+			slog.Info("fusion data missing or stale; fetching", "instance", schoolID, "cache_time", *CacheTime, "attempt", entry.ErrorN)
+		} else {
+			slog.Info("fusion data missing or stale; fetching", "instance", schoolID, "last_update", entry.Success, "cache_time", *CacheTime, "attempt", entry.ErrorN)
+		}
+
+		if bt := backoff(entry.Failure, entry.ErrorN); !bt.IsZero() && !bt.Before(time.Now()) {
+			slog.Warn("not attempting update due to backoff after last error", "instance", schoolID, "error", entry.Error, "error_time", entry.Failure, "attempt", entry.ErrorN, "backoff_until", bt)
+		} else {
+			update := time.Now()
+			if calendar, err := prepareCalendar(ctx, schoolID); err == nil {
+				entry.Failure = time.Time{}
+				entry.Error = nil
+				entry.ErrorN = 0
+
+				entry.Success = update
+				entry.Calendar = calendar
+
+				slog.Info("successfully updated fusion data", "instance", schoolID, "update_time", update, "update_duration", time.Since(update))
+			} else {
+				entry.Failure = update
+				entry.Error = err
+				entry.ErrorN++
+
+				if time.Since(entry.Success) > *StaleTime {
+					entry.Success = time.Time{}
+					entry.Calendar = nil
+				}
+
+				if !entry.Success.IsZero() {
+					slog.Warn("failed to update fusion data",
+						"instance", schoolID, "update_time", update, "update_duration", time.Since(update),
+						"error", entry.Error, "attempt", entry.ErrorN,
+						"using_old_data", true, "old_data_age", time.Since(entry.Success),
+					)
+				} else {
+					slog.Warn("failed to update fusion data",
+						"instance", schoolID, "update_time", update, "update_duration", time.Since(update),
+						"error", entry.Error, "attempt", entry.ErrorN,
+						"using_old_data", false,
+					)
+				}
+			}
+		}
+	}
+
+	if !entry.Failure.IsZero() {
+		return entry.Calendar, fmt.Errorf("failed to fetch calendar data (attempt %d, %s ago, retry in %s): %w", entry.ErrorN, time.Since(entry.Failure).Truncate(time.Second), time.Until(backoff(entry.Failure, entry.ErrorN)).Truncate(time.Second), entry.Error)
+	}
+	return entry.Calendar, nil
+}
 
 func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	w.Header().Set("Cache-Control", "private, no-cache, no-store")
@@ -242,33 +336,16 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		return
 	}
 
-	var generateCalendar generateCalendarFunc
-	if err := func() error {
-		cacheLock.Lock()
-		defer cacheLock.Unlock()
-
-		ctx, cancel := context.WithTimeout(context.Background(), *Timeout)
-		defer cancel()
-
-		if u, ok := cacheUpdated[schoolID]; !ok || time.Since(u) > *CacheTime {
-			slog.Info("fusion data missing or stale; fetching", "instance", schoolID, "last_update", u, "cache_time", *CacheTime)
-			u = time.Now()
-
-			generateCalendar, err := prepareCalendar(ctx, schoolID)
-			if err != nil {
-				return fmt.Errorf("prepare calendar: %w", err)
-			}
-
-			cacheUpdated[schoolID] = u
-			cacheCalendar[schoolID] = generateCalendar
+	generateCalendar, err := getCalendarCached(schoolID)
+	if err != nil {
+		if generateCalendar == nil {
+			http.Error(w, fmt.Sprintf("Failed to fetch data: %v", err), http.StatusInternalServerError)
+			return
 		}
-
-		generateCalendar = cacheCalendar[schoolID]
-
-		return nil
-	}(); err != nil {
-		slog.Error("failed to fetch data", "error", err, "instance", schoolID)
-		http.Error(w, fmt.Sprintf("Failed to fetch data: %v", err), http.StatusInternalServerError)
+		w.Header().Set("X-Refresh-Error", err.Error())
+	}
+	if generateCalendar == nil {
+		http.Error(w, "No calendar data available", http.StatusInternalServerError)
 		return
 	}
 

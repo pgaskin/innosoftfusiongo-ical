@@ -602,10 +602,10 @@ func prepareCalendar(ctx context.Context, schoolID int) (generateCalendarFunc, e
 				if !o.Activity.Match(ai.Activity) {
 					continue
 				}
-				if !slices.ContainsFunc(ai.Categories, o.Category.Match) {
+				if !o.Category.Match(ai.Categories...) {
 					continue
 				}
-				if !slices.ContainsFunc(ai.CategoryIDs, o.CategoryID.Match) {
+				if !o.CategoryID.Match(ai.CategoryIDs...) {
 					continue
 				}
 				if _, ok := activityFilter[ak]; !ok {
@@ -954,25 +954,31 @@ func makeFilter(ps []string, o filterOpts) filter {
 	return f
 }
 
-func (f filter) Match(s string) bool {
+func (f filter) Match(ss ...string) bool {
 	var match bool
 	if len(f.include) == 0 {
 		match = true
 	}
 	if !match || len(f.exclude) != 0 {
 		if f.collapse {
-			s = strings.Join(strings.Fields(s), " ")
+			for i, s := range ss {
+				ss[i] = strings.Join(strings.Fields(s), " ")
+			}
 		}
 		for _, c := range f.include {
-			if c.MatchString(s) {
-				match = true
-				break
+			for _, s := range ss {
+				if c.MatchString(s) {
+					match = true
+					break
+				}
 			}
 		}
 		for _, c := range f.exclude {
-			if c.MatchString(s) {
-				match = false
-				break
+			for _, s := range ss {
+				if c.MatchString(s) {
+					match = false
+					break
+				}
 			}
 		}
 	}

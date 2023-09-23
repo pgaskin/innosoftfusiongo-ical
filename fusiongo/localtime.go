@@ -51,6 +51,16 @@ func (v DateTimeRange) Less(x DateTimeRange) bool {
 	return v.Date.Less(x.Date)
 }
 
+func (v DateTimeRange) Compare(x DateTimeRange) int {
+	if v == x {
+		return 0
+	}
+	if v.Less(x) {
+		return -1
+	}
+	return 1
+}
+
 // TimeRange represents a start and end time. If the end time is before than
 // the start time, it is assumed that it ends on the next day.
 type TimeRange struct {
@@ -75,6 +85,16 @@ func (v TimeRange) Less(x TimeRange) bool {
 		return v.End.Less(x.End)
 	}
 	return v.Start.Less(x.Start)
+}
+
+func (v TimeRange) Compare(x TimeRange) int {
+	if v == x {
+		return 0
+	}
+	if v.Less(x) {
+		return -1
+	}
+	return 1
 }
 
 // DateTime combines Date and Time.
@@ -123,6 +143,16 @@ func (v DateTime) Less(x DateTime) bool {
 		return v.Time.Less(x.Time)
 	}
 	return v.Date.Less(x.Date)
+}
+
+func (v DateTime) Compare(x DateTime) int {
+	if v == x {
+		return 0
+	}
+	if v.Less(x) {
+		return -1
+	}
+	return 1
 }
 
 func (v DateTime) AddDays(d int) DateTime {
@@ -178,6 +208,16 @@ func (v Date) Less(x Date) bool {
 		return v.Month < x.Month
 	}
 	return v.Year < x.Year
+}
+
+func (v Date) Compare(x Date) int {
+	if v == x {
+		return 0
+	}
+	if v.Less(x) {
+		return -1
+	}
+	return 1
 }
 
 func (v Date) Date() (year int, month time.Month, day int) {
@@ -308,4 +348,14 @@ func (v Time) Less(x Time) bool {
 		return v.Minute < x.Minute
 	}
 	return v.Hour < x.Hour
+}
+
+func (v Time) Compare(x Time) int {
+	if v == x {
+		return 0
+	}
+	if v.Less(x) {
+		return -1
+	}
+	return 1
 }

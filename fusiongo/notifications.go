@@ -3,7 +3,6 @@ package fusiongo
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -23,22 +22,7 @@ type Notification struct {
 // FetchNotifications fetches the latest notifications for the provided instance
 // using the default CMS and HTTP client.
 func FetchNotifications(ctx context.Context, schoolID int) (*Notifications, error) {
-	return ProductionCMS.FetchNotifications(ctx, nil, schoolID)
-}
-
-// FetchNotifications fetches the latest notifications for the provided instance.
-func (c CMS) FetchNotifications(ctx context.Context, cl *http.Client, schoolID int) (*Notifications, error) {
-	fusionJSON, err := ProductionCMS.FetchJSON(ctx, nil, schoolID, "notifications")
-	if err != nil {
-		return nil, fmt.Errorf("fetch: %w", err)
-	}
-
-	notifications, err := ParseNotifications(fusionJSON)
-	if err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
-	}
-
-	return notifications, nil
+	return fetchAndParse(ctx, schoolID, "notifications", ParseNotifications)
 }
 
 // ParseNotifications parses an Innosoft Fusion Go notifications.json, returning

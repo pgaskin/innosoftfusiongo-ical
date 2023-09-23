@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -98,6 +97,11 @@ func main() {
 		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, logOptions)))
 	} else if logOptions != nil {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, logOptions)))
+	}
+
+	// setup testdata
+	if *Testdata != "" {
+		fusiongo.DefaultCMS = fusiongo.MockCMS(os.DirFS(*Testdata))
 	}
 
 	// setup http server
@@ -270,7 +274,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	}
 
 	// get cached prepared calendar
-	cal, err := getCalendarCached(schoolID)
+	cal, err := prepareCalendarCached(schoolID)
 	if err != nil {
 		if cal == nil {
 			http.Error(w, fmt.Sprintf("Failed to fetch data: %v", err), http.StatusInternalServerError)
@@ -381,10 +385,10 @@ func backoff(t time.Time, n int) time.Time {
 	}
 }
 
-// getCalendarCached gets the latest generate function for schoolID. Even if it
-// returns an error, it may still return an old generateCalendarFunc if it isn't
-// too stale.
-func getCalendarCached(schoolID int) (*ifgical.Calendar, error) {
+// prepareCalendarCached gets the latest generate function for schoolID. Even if
+// it returns an error, it may still return an old generateCalendarFunc if it
+// isn't too stale.
+func prepareCalendarCached(schoolID int) (*ifgical.Calendar, error) {
 	entryV, _ := cache.LoadOrStore(schoolID, new(cacheEntry))
 	entry := entryV.(*cacheEntry)
 
@@ -450,36 +454,14 @@ func getCalendarCached(schoolID int) (*ifgical.Calendar, error) {
 func prepareCalendar(ctx context.Context, schoolID int) (*ifgical.Calendar, error) {
 	tz, _ := Timezone.Get(schoolID)
 
-	// load schedule
-	var schedule *fusiongo.Schedule
-	if *Testdata != "" {
-		if buf, err := os.ReadFile(filepath.Join(*Testdata, "school"+strconv.Itoa(schoolID), "schedule.json")); err != nil {
-			return nil, fmt.Errorf("load schedule: %w", err)
-		} else if v, err := fusiongo.ParseSchedule(buf); err != nil {
-			return nil, fmt.Errorf("load schedule: %w", err)
-		} else {
-			schedule = v
-		}
-	} else if v, err := fusiongo.FetchSchedule(ctx, schoolID); err != nil {
-		return nil, fmt.Errorf("load schedule: %w", err)
-	} else {
-		schedule = v
+	schedule, err := fusiongo.FetchSchedule(ctx, schoolID)
+	if err != nil {
+		return nil, err
 	}
 
-	// load notifications
-	var notifications *fusiongo.Notifications
-	if *Testdata != "" {
-		if buf, err := os.ReadFile(filepath.Join(*Testdata, "school"+strconv.Itoa(schoolID), "notifications.json")); err != nil {
-			return nil, fmt.Errorf("load notifications: %w", err)
-		} else if v, err := fusiongo.ParseNotifications(buf); err != nil {
-			return nil, fmt.Errorf("load notifications: %w", err)
-		} else {
-			notifications = v
-		}
-	} else if v, err := fusiongo.FetchNotifications(ctx, schoolID); err != nil {
-		return nil, fmt.Errorf("load notifications: %w", err)
-	} else {
-		notifications = v
+	notifications, err := fusiongo.FetchNotifications(ctx, schoolID)
+	if err != nil {
+		return nil, err
 	}
 
 	return ifgical.Prepare(tz, ifgical.Data{

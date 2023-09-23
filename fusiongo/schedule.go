@@ -3,7 +3,6 @@ package fusiongo
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -33,22 +32,7 @@ type ActivityCategory struct {
 // FetchSchedule fetches the latest notifications for the provided instance
 // using the default CMS and HTTP client.
 func FetchSchedule(ctx context.Context, schoolID int) (*Schedule, error) {
-	return ProductionCMS.FetchSchedule(ctx, nil, schoolID)
-}
-
-// FetchSchedule fetches the latest notifications for the provided instance.
-func (c CMS) FetchSchedule(ctx context.Context, cl *http.Client, schoolID int) (*Schedule, error) {
-	fusionJSON, err := ProductionCMS.FetchJSON(ctx, nil, schoolID, "schedule")
-	if err != nil {
-		return nil, fmt.Errorf("fetch: %w", err)
-	}
-
-	schedule, err := ParseSchedule(fusionJSON)
-	if err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
-	}
-
-	return schedule, nil
+	return fetchAndParse(ctx, schoolID, "schedule", ParseSchedule)
 }
 
 // ParseSchedule parses an Innosoft Fusion Go schedule.json, returning the
@@ -61,7 +45,7 @@ func ParseSchedule(fusionJSON []byte) (*Schedule, error) {
 	var (
 		err           error
 		schedule      Schedule
-		scheduleIndex = map[ActivityInstance]int{} // to quickly check for dupliates
+		scheduleIndex = map[ActivityInstance]int{} // to quickly check for duplicates
 	)
 	gjson.ParseBytes(fusionJSON).ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {

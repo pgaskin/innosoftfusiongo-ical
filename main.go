@@ -36,7 +36,7 @@ var (
 	StaleTime         = flag.Duration("stale-time", time.Hour, "Amount of time after cache-time to continue using stale data for if the update fails")
 	Timeout           = flag.Duration("timeout", time.Second*5, "Timeout for fetching Innosoft Fusion Go data")
 	ProxyHeader       = flag.String("proxy-header", "", "Trusted header containing the remote address (e.g., X-Forwarded-For)")
-	InstanceWhitelist = flag.String("instance-whitelist", "", "Comma-separated whitelist of Innosoft Fusion Go instances to get data from")
+	InstanceWhitelist = flag_SchoolWhitelist("instance-whitelist", make(SchoolWhitelist), "Comma-separated whitelist of Innosoft Fusion Go instances to get data from")
 	Testdata          = flag.String("testdata", "", "Path to directory containing school%d/*.json files to test with")
 	Timezone          = flag_TimezoneMap("timezone", MustParseTimezoneMap("UTC,110=America/Toronto"), "Default timezone name, plus optional comma-separated schoolID=timezone pairs.")
 )
@@ -49,6 +49,12 @@ func flag_Level(name string, value slog.Level, usage string) *slog.Level {
 
 func flag_TimezoneMap(name string, value TimezoneMap, usage string) *TimezoneMap {
 	v := new(TimezoneMap)
+	flag.TextVar(v, name, value, usage)
+	return v
+}
+
+func flag_SchoolWhitelist(name string, value SchoolWhitelist, usage string) *SchoolWhitelist {
+	v := new(SchoolWhitelist)
 	flag.TextVar(v, name, value, usage)
 	return v
 }
@@ -168,29 +174,9 @@ func handle(w http.ResponseWriter, r *http.Request) {
 			ext = strings.ToLower(ext)
 			if instance, _ := strings.CutPrefix(instance, "school"); instance != "" {
 				if schoolID, _ := strconv.ParseInt(instance, 10, 64); schoolID != 0 {
-					if whitelist := *InstanceWhitelist; whitelist != "" {
-						var (
-							match           bool
-							more            bool
-							instanceCurrent string
-							instanceShort   = strconv.FormatInt(schoolID, 10)
-							instanceLong    = "school" + instanceShort
-						)
-						for {
-							instanceCurrent, whitelist, more = strings.Cut(whitelist, ",")
-							instanceCurrent = strings.TrimSpace(instanceCurrent)
-							if instanceCurrent == instanceShort || instanceCurrent == instanceLong {
-								match = true
-								break
-							}
-							if !more {
-								break
-							}
-						}
-						if !match {
-							http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
-							return
-						}
+					if !InstanceWhitelist.Has(int(schoolID)) {
+						http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
+						return
 					}
 					if ext != "ics" {
 						if ua := r.Header.Get("User-Agent"); false ||
@@ -564,6 +550,61 @@ func (f filter) Match(ss ...string) bool {
 	return match
 }
 
+// SchoolWhitelist is a set of whitelisted school IDs.
+type SchoolWhitelist map[int]struct{}
+
+// Has checks if the whitelist is empty or contains id.
+func (w SchoolWhitelist) Has(id int) bool {
+	if w == nil || len(w) == 0 {
+		return true
+	}
+	if id != 0 {
+		if _, ok := w[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// UnmarshalText parses zero or more comma-separated school IDs.
+func (w SchoolWhitelist) UnmarshalText(b []byte) error {
+	rest := string(b)
+
+	var val string
+	for rest != "" {
+		val, rest, _ = strings.Cut(rest, ",")
+		idS, _ := strings.CutPrefix(val, "school")
+		id, _ := strconv.ParseInt(idS, 10, 64)
+		if id == 0 {
+			return fmt.Errorf("parse id %q: invalid id %q", val, idS)
+		}
+		w[int(id)] = struct{}{}
+	}
+	return nil
+}
+
+// MarshalText is the opposite of UnmarshalText, but will sort the values.
+func (w SchoolWhitelist) MarshalText() ([]byte, error) {
+	var b []byte
+	if w != nil {
+		ids := make([]int, 0, len(w))
+		for id := range w {
+			if id != 0 {
+				ids = append(ids, id)
+			}
+		}
+		slices.Sort(ids)
+
+		for i, id := range ids {
+			if i != 0 {
+				b = append(b, ',')
+			}
+			b = strconv.AppendInt(b, int64(id), 10)
+		}
+	}
+	return b, nil
+}
+
 // TimezoneMap maps school IDs to timezones.
 type TimezoneMap map[int]*time.Location
 
@@ -616,9 +657,9 @@ func (t TimezoneMap) UnmarshalText(b []byte) error {
 		if !ok {
 			return fmt.Errorf("parse id=timezone pair %q: missing =", val)
 		}
-		id, err := strconv.ParseInt(idS, 10, 64)
-		if err != nil {
-			return fmt.Errorf("parse id=timezone pair %q: invalid id %q: %w", val, idS, err)
+		id, _ := strconv.ParseInt(idS, 10, 64)
+		if id == 0 {
+			return fmt.Errorf("parse id=timezone pair %q: invalid id %q", val, idS)
 		}
 		loc, err := time.LoadLocation(tz)
 		if err != nil {

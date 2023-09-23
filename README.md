@@ -9,6 +9,7 @@ API serving Innosoft Fusion Go schedule data as an iCalendar feed, plus a web UI
 - Options for working around client quirks.
 - Supports filtering activity/category/location.
 - Caches data and handles errors properly.
+- Automatic timezone detection.
 
 The school ID can be found in `assets/config.json` in a branded `com.innosoftfusiongo.*` APK.
 

@@ -90,7 +90,7 @@ func main() {
 
 	// ensure timezones are usable
 	for _, tz := range *Timezone {
-		if _, err := vtimezone.AppendRRULE(nil, tz); err != nil {
+		if _, err := vtimezone.Append(nil, tz); err != nil {
 			fmt.Fprintf(flag.CommandLine.Output(), "cannot use timezone %s: %v\n", tz, err)
 			os.Exit(2)
 		}

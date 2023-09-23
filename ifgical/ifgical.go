@@ -91,7 +91,7 @@ func (c *Calendar) initTimezone(tz *time.Location) error {
 	c.tz = tz
 
 	// generate the vtimezone object
-	if v, err := vtimezone.AppendRRULE(nil, tz); err != nil {
+	if v, err := vtimezone.Append(nil, tz); err != nil {
 		return fmt.Errorf("cannot generate rrule-based vtimezone object: %w", err)
 	} else {
 		c.tzV = v

@@ -24,6 +24,7 @@ import (
 	"github.com/pgaskin/innosoftfusiongo-ical/fusiongo"
 	"github.com/pgaskin/innosoftfusiongo-ical/ifgical"
 	"github.com/pgaskin/innosoftfusiongo-ical/vtimezone"
+	"github.com/ringsaturn/tzf"
 )
 
 const EnvPrefix = "IFGICAL"
@@ -38,7 +39,8 @@ var (
 	ProxyHeader       = flag.String("proxy-header", "", "Trusted header containing the remote address (e.g., X-Forwarded-For)")
 	InstanceWhitelist = flag_SchoolWhitelist("instance-whitelist", make(SchoolWhitelist), "Comma-separated whitelist of Innosoft Fusion Go instances to get data from")
 	Testdata          = flag.String("testdata", "", "Path to directory containing school%d/*.json files to test with")
-	Timezone          = flag_TimezoneMap("timezone", MustParseTimezoneMap("UTC,110=America/Toronto"), "Default timezone name, plus optional comma-separated schoolID=timezone pairs.")
+	Timezone          = flag_TimezoneMap("timezone", make(TimezoneMap), "Default timezone name (used when it can't be detected from facilities), plus optional comma-separated schoolID=timezone override pairs.")
+	NoTimezoneFinder  = flag.Bool("no-timezone-finder", false, "Disable automatic timezone detection")
 )
 
 func flag_Level(name string, value slog.Level, usage string) *slog.Level {
@@ -58,6 +60,8 @@ func flag_SchoolWhitelist(name string, value SchoolWhitelist, usage string) *Sch
 	flag.TextVar(v, name, value, usage)
 	return v
 }
+
+var tzfinder tzf.F
 
 func main() {
 	// parse config
@@ -108,6 +112,16 @@ func main() {
 	// setup testdata
 	if *Testdata != "" {
 		fusiongo.DefaultCMS = fusiongo.MockCMS(os.DirFS(*Testdata))
+	}
+
+	// setup timezone finder
+	if !*NoTimezoneFinder {
+		if f, err := tzf.NewDefaultFinder(); err != nil {
+			fmt.Fprintf(flag.CommandLine.Output(), "failed to load timezone finder: %v\n", err)
+			os.Exit(2)
+		} else {
+			tzfinder = f
+		}
 	}
 
 	// setup http server
@@ -454,7 +468,27 @@ func prepareCalendarCached(schoolID int) (*ifgical.Calendar, error) {
 }
 
 func prepareCalendar(ctx context.Context, schoolID int) (*ifgical.Calendar, error) {
-	tz, _ := Timezone.Get(schoolID)
+	facilities, err := fusiongo.FetchFacilities(ctx, schoolID)
+	if err != nil {
+		return nil, err
+	}
+
+	tz, override := Timezone.Get(schoolID)
+	if !override && tzfinder != nil {
+	ftz: // find the first valid timezone
+		for _, facility := range facilities.Facilities {
+			if lng, lat := facility.Longitude, facility.Latitude; lng != 0 && lat != 0 {
+				if ns, err := tzfinder.GetTimezoneNames(lng, lat); err == nil {
+					for _, n := range ns {
+						if tmp, err := time.LoadLocation(n); err == nil {
+							tz = tmp
+							break ftz
+						}
+					}
+				}
+			}
+		}
+	}
 
 	schedule, err := fusiongo.FetchSchedule(ctx, schoolID)
 	if err != nil {
@@ -466,11 +500,16 @@ func prepareCalendar(ctx context.Context, schoolID int) (*ifgical.Calendar, erro
 		return nil, err
 	}
 
-	return ifgical.Prepare(tz, ifgical.Data{
+	calendar, err := ifgical.Prepare(tz, ifgical.Data{
 		SchoolID:      schoolID,
 		Schedule:      schedule,
 		Notifications: notifications,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	return calendar, nil
 }
 
 type filterOpts struct {
@@ -623,14 +662,6 @@ func (w SchoolWhitelist) MarshalText() ([]byte, error) {
 
 // TimezoneMap maps school IDs to timezones.
 type TimezoneMap map[int]*time.Location
-
-func MustParseTimezoneMap(s string) TimezoneMap {
-	m := make(TimezoneMap)
-	if err := m.UnmarshalText([]byte(s)); err != nil {
-		panic(err)
-	}
-	return m
-}
 
 // Default gets the default timezone, or time.UTC if none was set. It will
 // never return nil.

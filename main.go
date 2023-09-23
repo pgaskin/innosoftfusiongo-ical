@@ -610,7 +610,7 @@ type SchoolWhitelist map[int]struct{}
 
 // Has checks if the whitelist is empty or contains id.
 func (w SchoolWhitelist) Has(id int) bool {
-	if w == nil || len(w) == 0 {
+	if len(w) == 0 {
 		return true
 	}
 	if id != 0 {

@@ -273,6 +273,28 @@ type Options struct {
 }
 
 // Render renders c as an iCalendar object. It is safe for concurrent use.
+//
+// The output is designed to be compatible with most calendar applications,
+// including:
+//
+//   - Microsoft Exchange Server (OWA)
+//   - Microsoft Outlook
+//   - Google Calendar
+//   - ICSx5/iCal4j
+//   - Apple Calendar (iCloud, iOS, macOS)
+//   - Thunderbird
+//
+// It is compliant with the following specifications (the MS one is generally a
+// subset of the RFCs, and for the common properties, the intersection of it
+// with the RFCs is close to the lowest common denominator of most clients):
+//
+//   - https://datatracker.ietf.org/doc/html/rfc5545
+//   - https://datatracker.ietf.org/doc/html/rfc6868
+//   - https://datatracker.ietf.org/doc/html/rfc7986
+//   - https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxcical/a685a040-5b69-4c84-b084-795113fb4012
+//
+// In particular, VTimezone objects and RRULEs are limited to a strict subset to
+// ensure compatibility.
 func (c *Calendar) Render(o Options) []byte {
 	b := icalAppendPropRaw(nil, "BEGIN", "VCALENDAR")
 
@@ -491,6 +513,7 @@ func (c *Calendar) Render(o Options) []byte {
 			b = icalAppendPropText(b, "DESCRIPTION", ai.Description+excDesc.String())
 			b = icalAppendPropDateTimeLocal(b, "DTSTART", ak.StartTime.WithDate(ai.Date), c.tz)
 			b = icalAppendPropDateTimeLocal(b, "DTEND", ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End(), c.tz)
+			// note: not CATEGORIES since it isn't supported by most applications, and it breaks the Outlook Web App (causing the filter list to be empty) as of 2023-09-23
 
 			// write custom props
 			b = icalAppendPropText(b, "X-FUSION-ACTIVITY-ID", ak.ActivityID)

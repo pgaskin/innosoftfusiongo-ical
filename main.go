@@ -161,8 +161,22 @@ func main() {
 	}
 }
 
+var calendarUserAgentRe = regexp.MustCompile(strings.Join([]string{
+	`^Google-Calendar-Importer`, // Google Calendar
+	`^Microsoft\.Exchange`,      // OWA
+	`(?:^| )CalendarAgent/`,     // macOS
+	`(?:^| )dataaccessd/`,       // iOS
+	`^ICSx5/`,                   // ICSx5 (Android)
+}, "|"))
+
 func handle(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimLeft(path.Clean(r.URL.Path), "/")
+
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		handleError(w, r, http.StatusMethodNotAllowed, "%s", http.StatusText(http.StatusMethodNotAllowed))
+		return
+	}
 
 	if p == "favicon.ico" {
 		handleFavicon(w, r)
@@ -170,54 +184,40 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !strings.ContainsRune(p, '/') || !strings.HasPrefix(p, ".") {
-		if instance, ext, _ := strings.Cut(p, "."); instance != "" {
-			ext = strings.ToLower(ext)
-			if instance, _ := strings.CutPrefix(instance, "school"); instance != "" {
-				if schoolID, _ := strconv.ParseInt(instance, 10, 64); schoolID != 0 {
-					if !InstanceWhitelist.Has(int(schoolID)) {
-						http.Error(w, fmt.Sprintf("Instance %q not on whitelist", instance), http.StatusForbidden)
-						return
-					}
-					if ext != "ics" {
-						if ua := r.Header.Get("User-Agent"); false ||
-							strings.HasPrefix(ua, "Google-Calendar-Importer") || // Google Calendar
-							strings.HasPrefix(ua, "Microsoft.Exchange/") || // OWA
-							strings.Contains(ua, "CalendarAgent/") || // macOS Calendar
-							strings.Contains(ua, "dataaccessd/") || // iOS Calendar
-							strings.HasPrefix(ua, "ICSx5/") || // ICSx5 Android
-							strings.HasPrefix(r.Header.Get("Accept"), "text/calendar") || // misc
-							false {
-							w.Header().Set("Cache-Control", "private, no-cache, no-store")
-							w.Header().Set("Pragma", "no-cache")
-							w.Header().Set("Expires", "0")
-							http.Redirect(w, r, (&url.URL{
-								Path:     "/" + strconv.FormatInt(schoolID, 10) + ".ics",
-								RawQuery: r.URL.RawQuery,
-							}).String(), http.StatusFound)
-							return
-						}
-					}
-					if ext == "" {
-						if r.Header.Get("Sec-Fetch-Dest") == "document" || strings.HasPrefix(r.Header.Get("User-Agent"), "Mozilla/") {
-							ext = "html"
-						} else {
-							ext = "ics"
-						}
-					}
-					switch ext {
-					case "html":
-						handleWeb(w, r, int(schoolID))
-						return
-					case "ics":
-						handleCalendar(w, r, int(schoolID))
-						return
-					}
-					http.Error(w, fmt.Sprintf("No handler for extension %q", ext), http.StatusNotFound)
+		if instance, ext, _ := strings.Cut(strings.ToLower(p), "."); instance != "" {
+			if schoolID, _ := strconv.ParseInt(strings.TrimPrefix(instance, "school"), 10, 64); schoolID != 0 {
+				if !InstanceWhitelist.Has(int(schoolID)) {
+					handleError(w, r, http.StatusForbidden, "Instance %q not on whitelist", instance)
 					return
 				}
+				if ext != "ics" && calendarUserAgentRe.MatchString(r.Header.Get("User-Agent")) {
+					w.Header().Set("Cache-Control", "private, no-cache, no-store")
+					w.Header().Set("Pragma", "no-cache")
+					w.Header().Set("Expires", "0")
+					http.Redirect(w, r, (&url.URL{
+						Path:     "/" + strconv.FormatInt(schoolID, 10) + ".ics",
+						RawQuery: r.URL.RawQuery,
+					}).String(), http.StatusFound)
+					return
+				}
+				if ext == "" {
+					if r.Header.Get("Sec-Fetch-Dest") == "document" || strings.HasPrefix(r.Header.Get("User-Agent"), "Mozilla/") {
+						ext = "html"
+					} else {
+						ext = "ics"
+					}
+				}
+				switch ext {
+				case "html":
+					handleWeb(w, r, int(schoolID))
+					return
+				case "ics":
+					handleCalendar(w, r, int(schoolID))
+					return
+				}
+				handleError(w, r, http.StatusNotFound, "No handler for extension %q", ext)
+				return
 			}
-			http.Error(w, fmt.Sprintf("Invalid instance %q", instance), http.StatusBadRequest)
-			return
 		}
 	}
 
@@ -227,24 +227,28 @@ func handle(w http.ResponseWriter, r *http.Request) {
 //go:embed favicon.ico
 var favicon []byte
 
-func handleFavicon(w http.ResponseWriter, _ *http.Request) {
+func handleFavicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/x-icon")
 	w.Header().Set("Content-Length", strconv.Itoa(len(favicon)))
 	w.WriteHeader(http.StatusOK)
-	w.Write(favicon)
+	if r.Method != http.MethodHead {
+		w.Write(favicon)
+	}
 }
 
 //go:embed calendar.html
 var calendarHTML []byte
 
-func handleWeb(w http.ResponseWriter, _ *http.Request, _ int) {
+func handleWeb(w http.ResponseWriter, r *http.Request, _ int) {
 	w.Header().Set("Cache-Control", "private, no-cache, no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Length", strconv.Itoa(len(calendarHTML)))
 	w.WriteHeader(http.StatusOK)
-	w.Write(calendarHTML)
+	if r.Method != http.MethodHead {
+		w.Write(calendarHTML)
+	}
 }
 
 func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
@@ -307,7 +311,19 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
 	w.WriteHeader(http.StatusOK)
-	w.Write(buf)
+	if r.Method != http.MethodHead {
+		w.Write(buf)
+	}
+}
+
+func handleError(w http.ResponseWriter, r *http.Request, status int, format string, a ...any) {
+	b := append(fmt.Appendf(nil, format, a...), '\n')
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
+	w.WriteHeader(status)
+	if r.Method != http.MethodHead {
+		w.Write(b)
+	}
 }
 
 // queryBool returns true if q[k] is empty and the last value is empty, k, or

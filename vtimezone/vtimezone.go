@@ -47,7 +47,7 @@ func icalTimezone(b []byte, tzid string, x tzinfo) []byte {
 		b = icalOffset(b, "TZOFFSETFROM", x.Standard.Offset)
 		b = icalOffset(b, "TZOFFSETTO", x.Daylight.Offset)
 		b = icalProp(b, "TZNAME", x.Daylight.Name)
-		b = icalDateTimeLocal(b, "DTSTART", time.Unix(int64(tzruleTime(1970, x.Transition.Start, x.Standard.Offset)), 0).In(time.FixedZone(x.Standard.Name, x.Standard.Offset)))
+		b = icalDateTimeLocal1970(b, "DTSTART", tzruleTime(1970, x.Transition.Start, x.Standard.Offset)+x.Standard.Offset)
 		b = icalRule(b, "RRULE", x.Transition.Start)
 		b = icalProp(b, "END", "DAYLIGHT")
 	}
@@ -60,9 +60,9 @@ func icalTimezone(b []byte, tzid string, x tzinfo) []byte {
 	b = icalOffset(b, "TZOFFSETTO", x.Standard.Offset)
 	b = icalProp(b, "TZNAME", x.Standard.Name)
 	if x.HasDST() {
-		b = icalDateTimeLocal(b, "DTSTART", time.Unix(int64(tzruleTime(1970, x.Transition.End, x.Daylight.Offset)), 0).In(time.FixedZone(x.Daylight.Name, x.Daylight.Offset)))
+		b = icalDateTimeLocal1970(b, "DTSTART", tzruleTime(1970, x.Transition.End, x.Daylight.Offset)+x.Daylight.Offset)
 	} else {
-		b = icalDateTimeLocal(b, "DTSTART", time.Unix(0, 0).In(time.FixedZone(x.Standard.Name, x.Standard.Offset)))
+		b = icalDateTimeLocal1970(b, "DTSTART", x.Standard.Offset)
 	}
 	if x.HasDST() {
 		b = icalRule(b, "RRULE", x.Transition.End)
@@ -80,10 +80,44 @@ func icalProp(b []byte, k, v string) []byte {
 	return b
 }
 
-func icalDateTimeLocal(b []byte, k string, t time.Time) []byte {
+func icalDateTimeLocal1970(b []byte, k string, ss int) []byte {
+	by := 1970 // not a leap year
+	if ss <= -7*24*60*60 || ss >= (365+7)*24*60*60 {
+		panic("out of range (must be within 1970 +/- 7 days)")
+	}
+	if ss < 0 {
+		ss += 365 * 24 * 60 * 60
+		by -= 1
+	}
+	tm, ts := ss/60, ss%60
+	th, tm := tm/60, tm%60
+	td, th := th/24, th%24
+	dy, td := td/365+by, td%365+1
+	dm, dd := 12, 0
+	for {
+		if x := int(daysBefore[dm-1]); td > x {
+			dd = td - x
+			break
+		}
+		dm--
+	}
 	b = append(b, k...)
 	b = append(b, ':')
-	b = t.AppendFormat(b, "20060102T150405")
+	b = append(b, '0'+byte(dy/10/10/10%10))
+	b = append(b, '0'+byte(dy/10/10%10))
+	b = append(b, '0'+byte(dy/10%10))
+	b = append(b, '0'+byte(dy%10))
+	b = append(b, '0'+byte(dm/10%10))
+	b = append(b, '0'+byte(dm%10))
+	b = append(b, '0'+byte(dd/10%10))
+	b = append(b, '0'+byte(dd%10))
+	b = append(b, 'T')
+	b = append(b, '0'+byte(th/10%10))
+	b = append(b, '0'+byte(th%10))
+	b = append(b, '0'+byte(tm/10%10))
+	b = append(b, '0'+byte(tm%10))
+	b = append(b, '0'+byte(ts/10%10))
+	b = append(b, '0'+byte(ts%10))
 	b = append(b, '\r', '\n')
 	return b
 }

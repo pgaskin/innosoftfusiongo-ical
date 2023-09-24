@@ -20,9 +20,11 @@ I mostly made this for myself, but I've published it in case anyone else finds i
 
 Example JQ filter for the JSON output:
 
-```
+```bash
+# show upcoming events
 curl -s 'https://ifgical.api.pgaskin.net/110.json?fake_cancelled=1&no_notifications=1' | jq -r '
-  .schedule | map(
+  .schedule
+  | map(
     . as $activity
     | $activity.instances
     | map(select(.isExclusion == false))
@@ -30,5 +32,22 @@ curl -s 'https://ifgical.api.pgaskin.net/110.json?fake_cancelled=1&no_notificati
   | [.[][]]
   | sort_by(._start_at)
   | map("\(.date_weekday[:3]) \(.date)   \(.startTime) - \(.endTime)   \((.activity+(" "*30))[:30]) \((.location+(" "*30))[:30]) \(.description[:60]+(if ((.description | length) > 60) then "..." else "" end))")
-  | .[]'
+  | .[]
+'
+
+# summarize all events in a category including human-readable recurrence information
+curl -s 'https://ifgical.api.pgaskin.net/110.json?category_id=721&no_notifications=1&describe_recurrence=1' | jq -r '
+  .schedule | sort_by(.base.date) | map(
+    "\(.base.activity)\n" +
+    " In \(.location)\n" +
+    if (.instances | length) > 1 then (
+      " Starts \(.base.date_weekday[:3]) \(.base.date)\n" +
+      " Until \(.instances[-1].date_weekday[:3]) \(.instances[-1].date)\n" +
+      " \(.recurrenceDescription)\n"
+    ) else (
+      " On \(.base.date_weekday[:3]) \(.base.date)\n" +
+      " At \(.startTime)\n"
+    ) end
+  ) | .[]
+'
 ```

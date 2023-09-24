@@ -226,7 +226,10 @@ func handle(w http.ResponseWriter, r *http.Request) {
 					handleWeb(w, r, int(schoolID))
 					return
 				case "ics":
-					handleCalendar(w, r, int(schoolID))
+					handleCalendar(w, r, int(schoolID), false)
+					return
+				case "json":
+					handleCalendar(w, r, int(schoolID), true)
 					return
 				}
 				handleError(w, r, http.StatusNotFound, "No handler for extension %q", ext)
@@ -265,7 +268,7 @@ func handleWeb(w http.ResponseWriter, r *http.Request, _ int) {
 	}
 }
 
-func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
+func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int, asJSON bool) {
 	w.Header().Set("Cache-Control", "private, no-cache, no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
@@ -303,6 +306,7 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 		FakeCancelled:      queryBool(q, "fake_cancelled"),
 		DeleteCancelled:    queryBool(q, "delete_cancelled"),
 		DescribeRecurrence: queryBool(q, "describe_recurrence"),
+		JSON:               asJSON,
 	}
 
 	// apply overrides
@@ -318,7 +322,9 @@ func handleCalendar(w http.ResponseWriter, r *http.Request, schoolID int) {
 	w.Header().Set("X-Generate-Time", strconv.FormatFloat(time.Since(generateStart).Seconds(), 'f', -1, 64))
 
 	// serve calendar
-	if r.Header.Get("Sec-Fetch-Dest") != "document" {
+	if asJSON {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	} else if r.Header.Get("Sec-Fetch-Dest") != "document" {
 		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
 	} else {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

@@ -5,6 +5,7 @@ package ifgical
 import (
 	"cmp"
 	"crypto/sha1"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/pgaskin/innosoftfusiongo-ical/fusiongo"
 	"github.com/pgaskin/innosoftfusiongo-ical/vtimezone"
@@ -343,6 +345,9 @@ type Options struct {
 
 	// List recurrence info and exceptions in event description.
 	DescribeRecurrence bool
+
+	// Dump everything as JSON instead.
+	JSON bool
 }
 
 // Render renders c as an iCalendar object. It is safe for concurrent use.
@@ -368,10 +373,17 @@ type Options struct {
 //
 // In particular, VTimezone objects and RRULEs are limited to a strict subset to
 // ensure compatibility.
+//
+// Some notes about the output if JSON output is used:
+//   - As an internal convention, camelCase is used for keys, and underscores
+//     are used to show alternate representations of data.
+//   - Instances can be built by assigning properties from each instance in the
+//     instances array over the base instance.
+//   - All instances include the date, isException, and isExclusion.
+//   - If an activity does not recur, there will be exactly one instance, which
+//     will always be !isException and !isExclusion.
+//   - If isExclusion, then isException will be true.
 func (c *Calendar) Render(o Options) []byte {
-	b := icalAppendPropRaw(nil, "BEGIN", "VCALENDAR")
-
-	// pre-filter activities
 	schFilter := map[activityKey][]bool{}
 	for _, ak := range c.schK {
 		if o.Location != nil && !o.Location.Match(ak.Location) {
@@ -399,6 +411,14 @@ func (c *Calendar) Render(o Options) []byte {
 			schFilter[ak][i] = true
 		}
 	}
+	if o.JSON {
+		return c.renderJSON(o, schFilter)
+	}
+	return c.renderICS(o, schFilter)
+}
+
+func (c *Calendar) renderICS(o Options, schFilter map[activityKey][]bool) []byte {
+	b := icalAppendPropRaw(nil, "BEGIN", "VCALENDAR")
 
 	// basic stuff
 	b = icalAppendPropRaw(b, "VERSION", "2.0")
@@ -454,76 +474,9 @@ func (c *Calendar) Render(o Options) []byte {
 		)
 
 		// describe recurrence information if enabled
-		var excDesc strings.Builder
-		if o.DescribeRecurrence && ar.Recur() {
-			excDesc.WriteString("\n\n")
-			excDesc.WriteString("Repeats ")
-			excDesc.WriteString(ak.StartTime.StringCompact())
-			excDesc.WriteString(" - ")
-			excDesc.WriteString(ar.Base.EndTime.StringCompact())
-			if slices.Contains(ak.Weekday[:], false) {
-				excDesc.WriteString(" [")
-				for i, x := range akDays {
-					if i != 0 {
-						excDesc.WriteString(", ")
-					}
-					excDesc.WriteString(x)
-				}
-				excDesc.WriteString("]")
-			}
-			ar.Iter(func(d fusiongo.Date, ex bool, i int) {
-				if ex {
-					var (
-						hasDiff bool
-						diff    string
-						diffs   []string
-					)
-					if i == -1 {
-						diff = "not"
-						hasDiff = true
-					} else if !schFilter[ak][i] {
-						diff = "does not match filter"
-						hasDiff = true
-					} else {
-						ai := ar.Instances[i]
-						switch {
-						case ai.IsCancelled:
-							diff = "cancelled"
-							hasDiff = true
-						case ai.EndTime != ar.Base.EndTime:
-							diff = "ends at " + ai.EndTime.StringCompact()
-							hasDiff = true
-						default:
-							diff = "differs"
-						}
-						if ai.Activity != ar.Base.Activity {
-							diffs = append(diffs, "name="+strconv.Quote(ai.Activity))
-							hasDiff = true
-						}
-						if ai.Description != ar.Base.Description {
-							diffs = append(diffs, "description="+strconv.Quote(ai.Description))
-							hasDiff = true
-						}
-						if !slices.Equal(ai.Categories, ar.Base.Categories) {
-							diffs = append(diffs, "categories="+fmt.Sprintf("%q", ai.Categories))
-						}
-					}
-					if hasDiff {
-						excDesc.WriteString("\n • ")
-						excDesc.WriteString(diff)
-						excDesc.WriteString(" on ")
-						excDesc.WriteString(fmt.Sprintf("%s %s %02d", d.Weekday().String()[:3], d.Month.String()[:3], d.Day))
-						for i, x := range diffs {
-							if i == 0 {
-								excDesc.WriteString(": ")
-							} else {
-								excDesc.WriteString(", ")
-							}
-							excDesc.WriteString(x)
-						}
-					}
-				}
-			})
+		excDesc := c.describeRecurrence(ak, schFilter)
+		if excDesc != "" {
+			excDesc = "\n\n" + excDesc
 		}
 
 		// write events
@@ -549,7 +502,7 @@ func (c *Calendar) Render(o Options) []byte {
 
 			// write more event info
 			b = icalAppendPropText(b, "LOCATION", ak.Location)
-			b = icalAppendPropText(b, "DESCRIPTION", ai.Description+excDesc.String())
+			b = icalAppendPropText(b, "DESCRIPTION", ai.Description+excDesc)
 			b = icalAppendPropDateTimeLocal(b, "DTSTART", ak.StartTime.WithDate(ai.Date), c.tz)
 			b = icalAppendPropDateTimeLocal(b, "DTEND", ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End(), c.tz)
 			// note: not CATEGORIES since it isn't supported by most applications, and it breaks the Outlook Web App (causing the filter list to be empty) as of 2023-09-23
@@ -618,6 +571,205 @@ func (c *Calendar) Render(o Options) []byte {
 
 	b = icalAppendPropRaw(b, "END", "VCALENDAR")
 	return b
+}
+
+func (c *Calendar) renderJSON(o Options, schFilter map[activityKey][]bool) []byte {
+	b := jsonObject(nil, '{')
+
+	// timezone
+	b = jsonStr(jsonKey(b, "timezone"), c.tz.String())
+
+	// update times
+	b = jsonObject(jsonKey(b, "updated"), '{')
+	if !c.schT.IsZero() {
+		b = jsonAny(jsonKey(b, "schedule"), c.schT)
+	}
+	if !c.notT.IsZero() {
+		b = jsonAny(jsonKey(b, "notifications"), c.notT)
+	}
+	b = jsonObject(b, '}')
+
+	// schedule
+	b = jsonObject(jsonKey(b, "schedule"), '[')
+	for _, ak := range c.schK {
+		if _, include := schFilter[ak]; !include {
+			continue
+		}
+		ar := c.sch[ak]
+
+		writeEvent := func(d fusiongo.Date, ex bool, i int) {
+			// base recurrence properties
+			b = jsonStr(jsonKey(b, "date"), d.String())
+			if i != -2 {
+				b = jsonBool(jsonKey(b, "isException"), ex)
+				b = jsonBool(jsonKey(b, "isExclusion"), i == -1)
+			}
+			b = jsonAny(jsonKey(b, "date_at"), d.In(c.tz))
+			b = jsonStr(jsonKey(b, "date_weekday"), d.Weekday().String())
+			b = jsonInt(jsonKey(b, "date_weekday_num"), d.Weekday())
+
+			// instance information
+			if i == -2 || i >= 0 {
+				var ai activityInstance
+				if i == -2 {
+					ai = ar.Base
+				} else {
+					ai = ar.Instances[i]
+				}
+				if i != -2 && ai.IsCancelled != ar.Base.IsCancelled { // only if not the base instance
+					b = jsonBool(jsonKey(b, "isCancelled"), ai.IsCancelled)
+				}
+				if i == -2 || ai.Activity != ar.Base.Activity {
+					b = jsonStr(jsonKey(b, "activity"), ai.Activity)
+				}
+				if o.FakeCancelled && ai.IsCancelled {
+					ai.Description = "CANCELLED - " + ai.Description
+				}
+				if i == -2 || ai.Description != ar.Base.Description {
+					b = jsonStr(jsonKey(b, "description"), ai.Description)
+				}
+				if i == -2 || ai.EndTime != ar.Base.EndTime {
+					b = jsonStr(jsonKey(b, "endTime"), ai.EndTime.StringCompact())
+				}
+				if i == -2 || !slices.Equal(ai.Categories, ar.Base.Categories) {
+					b = jsonObject(jsonKey(b, "categories"), '[')
+					for i := range ai.Categories {
+						b = jsonObject(b, '{')
+						b = jsonStr(jsonKey(b, "id"), ai.CategoryIDs[i])
+						b = jsonStr(jsonKey(b, "name"), ai.Categories[i])
+						b = jsonObject(b, '}')
+					}
+					b = jsonObject(b, ']')
+				}
+				b = jsonStr(jsonKey(b, "_start"), ak.StartTime.WithDate(ai.Date).String())
+				b = jsonAny(jsonKey(b, "_start_at"), ak.StartTime.WithDate(ai.Date).In(c.tz))
+				b = jsonStr(jsonKey(b, "_end"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().String())
+				b = jsonAny(jsonKey(b, "_end_at"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz))
+				b = jsonStr(jsonKey(b, "_duration"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).Sub(ak.StartTime.WithDate(ai.Date).In(c.tz)).Truncate(time.Second).String())
+				b = jsonAny(jsonKey(b, "_duration_secs"), int(ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).Sub(ak.StartTime.WithDate(ai.Date).In(c.tz)).Truncate(time.Second).Seconds()))
+			}
+		}
+
+		b = jsonObject(b, '{')
+		b = jsonStr(jsonKey(b, "activityID"), ak.ActivityID)
+		b = jsonStr(jsonKey(b, "location"), ak.Location)
+		b = jsonStr(jsonKey(b, "startTime"), ak.StartTime.StringCompact())
+		b = jsonAny(jsonKey(b, "weekdays"), ar.Weekday)
+		b = jsonObject(jsonKey(b, "base"), '{')
+		writeEvent(ar.Base.Date, false, -2)
+		b = jsonObject(b, '}')
+		b = jsonObject(jsonKey(b, "instances"), '[')
+		ar.Iter(func(d fusiongo.Date, ex bool, i int) {
+			if i != -1 && !schFilter[ak][i] {
+				i = -1
+			}
+			b = jsonObject(b, '{')
+			writeEvent(d, ex, i)
+			b = jsonObject(b, '}')
+		})
+		b = jsonObject(b, ']')
+		if o.DescribeRecurrence && ar.Recur() {
+			b = jsonStr(jsonKey(b, "recurrenceDescription"), c.describeRecurrence(ak, schFilter))
+		}
+		b = jsonObject(b, '}')
+	}
+	b = jsonObject(b, ']')
+
+	// notifications
+	b = jsonObject(jsonKey(b, "notifications"), '[')
+	if !o.NoNotifications {
+		for _, ni := range c.not {
+			b = jsonObject(b, '{')
+			b = jsonStr(jsonKey(b, "id"), ni.ID)
+			b = jsonStr(jsonKey(b, "text"), ni.Text)
+			b = jsonStr(jsonKey(b, "sent"), ni.Sent.String())
+			b = jsonAny(jsonKey(b, "sent_at"), ni.Sent.In(c.tz))
+			b = jsonObject(b, '}')
+		}
+	}
+	b = jsonObject(b, ']')
+
+	return jsonObject(b, '}')
+}
+
+func (c *Calendar) describeRecurrence(ak activityKey, schFilter map[activityKey][]bool) string {
+	var excDesc strings.Builder
+	ar := c.sch[ak]
+	if ar.Recur() {
+		excDesc.WriteString("Repeats ")
+		excDesc.WriteString(ak.StartTime.StringCompact())
+		excDesc.WriteString(" - ")
+		excDesc.WriteString(ar.Base.EndTime.StringCompact())
+		if slices.Contains(ak.Weekday[:], false) {
+			excDesc.WriteString(" [")
+			for i, x := range weekdayFilterMap(ak.Weekday, func(wd time.Weekday, x bool) (string, bool) {
+				if x {
+					return strings.ToUpper(time.Weekday(wd).String()[:2]), true
+				}
+				return "", false
+			}) {
+				if i != 0 {
+					excDesc.WriteString(", ")
+				}
+				excDesc.WriteString(x)
+			}
+			excDesc.WriteString("]")
+		}
+		ar.Iter(func(d fusiongo.Date, ex bool, i int) {
+			if ex {
+				var (
+					hasDiff bool
+					diff    string
+					diffs   []string
+				)
+				if i == -1 {
+					diff = "not"
+					hasDiff = true
+				} else if !schFilter[ak][i] {
+					diff = "does not match filter"
+					hasDiff = true
+				} else {
+					ai := ar.Instances[i]
+					switch {
+					case ai.IsCancelled:
+						diff = "cancelled"
+						hasDiff = true
+					case ai.EndTime != ar.Base.EndTime:
+						diff = "ends at " + ai.EndTime.StringCompact()
+						hasDiff = true
+					default:
+						diff = "differs"
+					}
+					if ai.Activity != ar.Base.Activity {
+						diffs = append(diffs, "name="+strconv.Quote(ai.Activity))
+						hasDiff = true
+					}
+					if ai.Description != ar.Base.Description {
+						diffs = append(diffs, "description="+strconv.Quote(ai.Description))
+						hasDiff = true
+					}
+					if !slices.Equal(ai.Categories, ar.Base.Categories) {
+						diffs = append(diffs, "categories="+fmt.Sprintf("%q", ai.Categories))
+					}
+				}
+				if hasDiff {
+					excDesc.WriteString("\n • ")
+					excDesc.WriteString(diff)
+					excDesc.WriteString(" on ")
+					excDesc.WriteString(fmt.Sprintf("%s %s %02d", d.Weekday().String()[:3], d.Month.String()[:3], d.Day))
+					for i, x := range diffs {
+						if i == 0 {
+							excDesc.WriteString(": ")
+						} else {
+							excDesc.WriteString(", ")
+						}
+						excDesc.WriteString(x)
+					}
+				}
+			}
+		})
+	}
+	return excDesc.String()
 }
 
 // cmpMulti combines multiple compare results for use in a sort function by
@@ -716,6 +868,14 @@ func remap[K comparable, V any](m map[K]V, fns ...func(K, V, map[K]V)) map[K]V {
 		m = n
 	}
 	return m
+}
+
+// last gets the last element of a, or returns the zero value if len(a) == 0.
+func last[T any](a []T) (v T) {
+	if len(a) != 0 {
+		v = a[len(a)-1]
+	}
+	return
 }
 
 // mapGroupInto groups xs by arbitrary keys, converting the values.
@@ -841,4 +1001,96 @@ func icalAppendPropDateTimeUTC(b []byte, key string, dt fusiongo.DateTime) []byt
 // icalAppendDateTimeUTC appends a date-time.
 func icalAppendDateTimeUTC(b []byte, dt fusiongo.DateTime) []byte {
 	return fmt.Appendf(b, "%04d%02d%02dT%02d%02d%02dZ", dt.Year, dt.Month, dt.Day, dt.Hour, dt.Minute, dt.Second)
+}
+
+func jsonKey(b []byte, k string) []byte {
+	b = jsonObject(b, ',')
+	b = append(b, '"')
+	b = append(b, k...)
+	b = append(b, '"', ':')
+	return b
+}
+
+func jsonObject(b []byte, c byte) []byte {
+	switch c {
+	case '{', '[': // start object/array
+		switch last(b) {
+		case 0, ':', ',', '[':
+			b = append(b, c)
+			return b
+		case ']', '}', 'l', 'e', '"', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			b = append(b, ',')
+			b = append(b, c)
+			return b
+		}
+	case '}', ']': // end object/array
+		switch last(b) {
+		case '[', '{', ']', '}', 'l', 'e', '"', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			b = append(b, c)
+			return b
+		case ':', ',':
+			b[len(b)-1] = c
+			return b
+		}
+	case ',': // key
+		switch last(b) {
+		case 0, '{', ',':
+			return b
+		case ']', '}', 'l', 'e', '"', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			b = append(b, ',')
+			return b
+		}
+	case ':': // value
+		switch last(b) {
+		case 0, ':', ',', '[':
+			return b
+		case ']', '}', 'l', 'e', '"', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			b = append(b, ',')
+			return b
+		}
+	}
+	if i := len(b) - 100; i > 0 {
+		panic("json: cannot add " + string(c) + " at ..." + string(b[i:]))
+	}
+	panic("json: cannot add " + string(c) + " at " + string(b))
+}
+
+func jsonNull(b []byte) []byte {
+	return append(jsonObject(b, ':'), "null"...)
+}
+
+func jsonBool[T ~bool](b []byte, v T) []byte {
+	b = jsonObject(b, ':')
+	if v {
+		b = append(b, "true"...)
+	} else {
+		b = append(b, "false"...)
+	}
+	return b
+}
+
+func jsonInt[T ~int | ~int8 | ~int16 | ~int32 | ~int64](b []byte, n T) []byte {
+	return strconv.AppendInt(jsonObject(b, ':'), int64(n), 10)
+}
+
+func jsonUint[T ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](b []byte, n T) []byte {
+	return strconv.AppendUint(jsonObject(b, ':'), uint64(n), 10)
+}
+
+func jsonFloat[T ~float32 | ~float64](b []byte, n T) []byte {
+	return strconv.AppendFloat(jsonObject(b, ':'), float64(n), 'f', -1, int(unsafe.Sizeof(n)*8))
+}
+
+func jsonStr[T ~[]byte | ~string](b []byte, s T) []byte {
+	x, _ := json.Marshal(string(s))
+	return append(jsonObject(b, ':'), x...)
+}
+
+func jsonStrf(b []byte, format string, a ...any) []byte {
+	return jsonStr(b, fmt.Sprintf(format, a...))
+}
+
+func jsonAny(b []byte, v any) []byte {
+	x, _ := json.Marshal(v)
+	return append(jsonObject(b, ':'), x...)
 }

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
     <title>Calendar</title>
+    <meta name="mobile-web-app-capable" content="yes">
     <style>
         * {
             box-sizing: border-box;
@@ -16,159 +17,320 @@
             font-size: 1rem;
             font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
         }
-        html, body, #app {
+        html, body {
             height: 100%;
             padding: 0;
             margin: 0;
-            overflow: hidden;
-        }
-        #app {
-            display: grid;
-            grid-template-rows: min-content 1fr;
-            grid-template-columns: 360px minmax(360px, 2fr);
-            grid-template-areas: "nav nav" "opts calendar";
-            overflow-x: auto;
-            font-size: .875em;
-        }
-        #app > #nav {
-            display: flex;
-            align-items: center;
-            grid-area: nav;
-            background: rgba(0, 0, 0, 0.08);
-            padding: .5em;
-            gap: .5em;
-        }
-        #app > #nav > #query {
-            min-width: 0;
-            flex: 1;
-            padding: .25em;
-            font-size: inherit;
-            border: 1px solid #999;
             background: #fff;
             color: #000;
         }
-        #app > #opts {
-            grid-area: opts;
-            min-height: 0;
-            overflow-y: auto;
-            padding: 0 .5em;
-            background: #fff;
-        }
-        #app > #opts > .opt {
-            border: 1px solid #ccc;
-            background: rgba(0, 0, 0, 0.02);
-            margin: .5em 0;
-        }
-        #app > #opts > .opt .opt__doc {
-            font-size: 0.75em;
-        }
-        #app > #opts > .opt.opt--flag label {
+        .app {
             display: grid;
-            grid-template-columns: min-content 1fr;
             grid-template-rows: min-content 1fr;
-            grid-template-areas: "cb name" ". doc";
-            padding: .5em;
-            gap: .5em;
-            align-items: center;
+            grid-template-columns: 360px minmax(360px, 2fr);
+            grid-template-areas: "toolbar toolbar" "options main";
+            overflow: hidden;
+            height: 100%;
+            background: var(--app-panel-background);
+            color: #000;
+            --app-spacing: .5rem;
+            --app-panel-border: #ccc;
+            --app-panel-border-radius: 4px;
+            --app-panel-background: #eee;
+            --app-panel-background-lighter: #f4f4f4;
+            --app-content-background: #fff;
+            --app-control-border: rgba(0, 0, 0, 0.25);
+            --app-input-background: #fff;
+            --app-input-color: #000;
+            --app-button-background: #cdf;
+            --app-button-background-hover: #abe;
+            --app-button-background-active: #89e;
+            --app-button-background-r: #fcc;
+            --app-button-background-r-hover: #eaa;
+            --app-button-background-r-active: #ed8787;
+            --app-button-background-g: #d2ffcc;
+            --app-button-background-g-hover: #b2eeaa;
+            --app-button-background-g-active: #93ed87;
+            --app-button-color: #000;
         }
-        #app > #opts > .opt.opt--flag label:hover {
-            background: rgba(0, 0, 0, 0.05);
+        .app input,
+        .app button {
+            font: inherit;
+            text-decoration: none;
+            border-radius: var(--app-panel-border-radius);
+            border: 1px solid var(--app-control-border);
+            outline: none;
+            margin: 0;
+            padding: .25em;
         }
-        #app > #opts > .opt.opt--flag .opt__cb {
-            grid-area: cb;
+        .app input:disabled,
+        .app button:disabled {
+            opacity: 0.5;
         }
-        #app > #opts > .opt.opt--flag .opt__name {
-            grid-area: name;
+        .app input {
+            background: var(--app-input-background);
+            color: var(--app-input-color);
+            min-width: 0;
         }
-        #app > #opts > .opt.opt--flag .opt__doc {
-            grid-area: doc;
+        .app button {
+            background: var(--app-button-background);
+            color: var(--app-button-color);
+            min-width: 2em;
+            text-align: center;
         }
-        #app > #opts > .opt.opt--filter {
-            display: block;
-            padding: .5em;
+        .app button.primary {
+            --app-button-background: var(--app-button-background-g);
+            --app-button-background-hover: var(--app-button-background-g-hover);
+            --app-button-background-active: var(--app-button-background-g-active);
         }
-        #app > #opts > .opt.opt--filter .opt__name {
-            display: block;
+        .app button.delete {
+            --app-button-background: var(--app-button-background-r);
+            --app-button-background-hover: var(--app-button-background-r-hover);
+            --app-button-background-active: var(--app-button-background-r-active);
         }
-        #app > #opts > .opt.opt--filter .opt__doc {
+        .app button:hover {
+            background: var(--app-button-background-hover);
+        }
+        .app button:active {
+            background: var(--app-button-background-active);
+        }
+        .app input:focus-visible,
+        .app button:focus-visible {
+            outline: 2px solid rgba(128, 128, 128, 0.15);
+        }
+        .app > * {
+            min-width: 0;
+        }
+        .app > nav.toolbar {
+            grid-area: toolbar;
+            display: flex;
+            padding: var(--app-spacing);
+            gap: var(--app-spacing);
+            line-height: 1;
+            white-space: nowrap;
+            align-items: stretch;
+        }
+        .app > nav.toolbar > * {
+            height: 32px;
+            min-width: 0;
+        }
+        .app > nav.toolbar > input[type="text"] {
+            flex: 1;
+            min-width: 0;
+        }
+        .app > nav.toolbar > button.options {
+            display: none;
+        }
+        .app > aside.options {
+            grid-area: options;
+            display: flex;
+            flex-direction: column;
+            gap: var(--app-spacing);
+            padding: 0 var(--app-spacing) var(--app-spacing);
+            overflow-y: auto;
+            font-size: .875em;
+        }
+        .app > aside.options > section {
+            display: none;
+            border: 1px solid var(--app-panel-border);
+            background: var(--app-panel-background-lighter);
+            border-radius: var(--app-panel-border-radius);
+        }
+        .app > aside.options > section .opt__name {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+            user-select: none;
+        }
+        .app > aside.options > section .opt__doc {
+            font-size: 0.75em;
+            opacity: 0.75;
             margin-top: .25em;
+            user-select: none;
         }
-        #app > #opts > .opt.opt--filter .opt__item {
+        .app > aside.options > section.opt--flag,
+        .app > aside.options > section.opt--filter {
+            display: block;
+        }
+        .app > aside.options > section.opt--flag:hover {
+            background: var(--app-panel-background);
+        }
+        .app > aside.options > section.opt--flag > label {
+            display: flex;
+            gap: var(--app-spacing);
+            padding: var(--app-spacing);
+            align-items: flex-start;
+        }
+        .app > aside.options > section.opt--flag > label > input {
+            flex: 0 0 auto;
+        }
+        .app > aside.options > section.opt--flag > label > div {
+            flex: 1;
+            min-width: 0;
+        }
+        .app > aside.options > section.opt--flag .opt__doc {
+            flex: 1;
+        }
+        .app > aside.options > section.opt--filter {
+            display: block;
+            padding: var(--app-spacing);
+        }
+        .app > aside.options > section.opt--filter .opt__item {
             display: flex;
             align-items: stretch;
             gap: .25em;
             margin-top: .25em;
         }
-        #app > #opts > .opt.opt--filter .opt__item > input {
-            min-width: 0;
+        .app > aside.options > section.opt--filter .opt__item > input {
             flex: 1;
-            font-size: inherit;
-            border: 1px solid #999;
-            background: #fff;
-            color: #000;
         }
-        #app > #opts > .opt.opt--filter .opt__item > input:disabled {
-            background: rgba(0, 0, 0, 0.05);
-            border-color: transparent;
-            color: #666;
-        }
-        #app > #opts > .opt.opt--filter .opt__item > button {
-            display: flex;
+        .app > aside.options > section.opt--filter .opt__item > button {
             flex: 0 0 auto;
         }
-        #app > #calendar {
-            grid-area: calendar;
-            padding: .5em;
+        .app > main {
+            grid-area: main;
+            display: flex;
+            flex-direction: column;
+            gap: var(--app-spacing);
+            padding: 0 var(--app-spacing) var(--app-spacing) 0;
         }
-        #app > #calendar > #error {
-            padding: .5em;
-            margin-bottom: .5em;
+        .app > main > section {
+            flex: 0 0 auto;
+            border-radius: 4px;
+            padding: var(--app-spacing);
+            border: 1px solid var(--app-panel-border);
+            background: var(--app-content-background);
+        }
+        .app > main > section.error {
+            grid-area: error;
             border: 1px solid rgba(128, 0, 0, 0.5);
             background: rgba(128, 0, 0, 0.2);
+            padding: var(--app-spacing);
+            border-radius: var(--app-panel-border-radius);
         }
-
-        #app > #nav > #btn_opts {
-            display: none;
+        .app > main > section.calendar {
+            flex: 1;
+            overflow: auto;
+            font-size: .875em;
+        }
+        .app > main > section.calendar.fc {
+            --fc-page-bg-color: var(--app-content-background);
+            --fc-button-bg-color: var(--app-button-background);
+            --fc-button-text-color: var(--app-button-color);
+            --fc-button-hover-bg-color: var(--app-button-background-hover);
+            --fc-button-active-bg-color: var(--app-button-background-active);
+            --fc-button-border-color: var(--app-control-border);
+            --fc-button-active-border-color: var(--app-control-border);
+            --fc-button-hover-border-color: var(--app-control-border);
+            --fc-list-event-hover-bg-color: transparent;
+            --fc-border-color: rgba(0, 0, 0, 0.2);
+            --fc-neutral-bg-color: rgb(238, 238, 238);
+            --fc-event-bg-color: rgba(238, 238, 238, 0.8);
+            --fc-event-text-color: #111;
+            --fc-event-border-color: #ccc;
+        }
+        .app > main > section.calendar.fc .fc-event-main {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: .875em;
+        }
+        .app > main > section.calendar.fc .fc-header-toolbar {
+            margin-bottom: var(--app-spacing);
+        }
+        .app > main > section.calendar.fc .fc-header-toolbar .fc-button {
+            padding: 0.5em 0.75em;
+            line-height: 1;
+            font-size: inherit;
+        }
+        .app > main > section.calendar.fc .fc-header-toolbar .fc-button .fc-icon {
+            font-size: inherit;
+        }
+        .app > main > section.calendar.fc .fc-header-toolbar .fc-button:focus:not(:focus-visible) {
+            box-shadow: none;
+            outline: none;
         }
         @media screen and (max-width: 720px) {
-            #app {
-                grid-template-rows: min-content;
+            .app {
+                grid-template-rows: min-content 1fr;
                 grid-template-columns: 1fr;
-                grid-template-areas: "nav" "calendar";
+                grid-template-areas: "toolbar" "main";
             }
-            #app > #nav > #btn_opts {
+            .app > nav.toolbar > button.options {
                 display: block;
             }
-            #app > #opts {
-                grid-area: calendar;
-                z-index: 1000;
+            .app.options-expanded > nav.toolbar > button.options {
+                background: var(--app-button-background-active);
             }
-            #app:not(.app--opts-expanded) > #opts {
+            .app > aside.options {
+                grid-area: main;
+                z-index: 100;
+                background: var(--app-panel-background);
+            }
+            .app:not(.options-expanded) > aside.options {
                 display: none;
+            }
+            .app > main {
+                padding: 0 var(--app-spacing) var(--app-spacing) var(--app-spacing);
+            }
+        }
+        @media screen and (prefers-color-scheme: dark) {
+            html, body {
+                background: #111;
+                color: #eee;
+            }
+            .app {
+                color: #eee;
+                --app-panel-border: #333;
+                --app-panel-background: #111;
+                --app-panel-background-lighter: #222;
+                --app-content-background: #000;
+                --app-control-border: rgba(255, 255, 255, 0.25);
+                --app-input-background: #444;
+                --app-input-color: #fff;
+                --app-button-color: #fff;
+                --app-button-background: hsl(220, 100%, 30%);
+                --app-button-background-hover: hsl(225, 67%, 23%);
+                --app-button-background-active: hsl(230, 75%, 15%);
+                --app-button-background-r: hsl(0, 100%, 30%);
+                --app-button-background-r-hover: hsl(0, 67%, 23%);
+                --app-button-background-r-active: hsl(0, 74%, 15%);
+                --app-button-background-g: hsl(113, 100%, 30%);
+                --app-button-background-g-hover: hsl(113, 67%, 23%);
+                --app-button-background-g-active: hsl(113, 74%, 15%);
+            }
+            .app > main > section.calendar.fc {
+                --fc-border-color: rgba(255, 255, 255, 0.2);
+                --fc-neutral-bg-color: rgb(28, 28, 28);
+                --fc-event-bg-color: rgba(28, 28, 28, 0.8);
+                --fc-event-text-color: #eee;
+                --fc-event-border-color: #333;
             }
         }
     </style>
 </head>
 <body>
-    <div id="app">
-        <nav id="nav">
-            <button id="btn_opts">Options</button>
-            <input type="text" id="query" autocomplete="off" autocapitalize="off" placeholder="Options...">
-            <button id="btn_ics">Subscribe</button>
+    <div id="app" class="app">
+        <nav class="toolbar">
+            <img src="favicon.ico">
+            <button class="options options">Options</button>
+            <input type="text" class="query" autocomplete="off" autocapitalize="off" placeholder="Options...">
+            <button class="primary subscribe">Subscribe</button>
         </nav>
-        <aside id="opts">
-            <section class="opt" data-opt="activity" data-opt-name="Activity" data-opt-type="filter" data-opt-example="*badminton" data-opt-doc="Case-insensitive activity name filter supporting wildcards."></section>
-            <section class="opt" data-opt="activity_id" data-opt-name="Activity ID" data-opt-type="filter" data-opt-example="00000000000000000000000000000000" data-opt-doc="Case-insensitive internal activity UUID filter."></section>
-            <section class="opt" data-opt="category" data-opt-name="Category" data-opt-type="filter" data-opt-example="lane swim schedules" data-opt-doc="Case-insensitive internal category name filter."></section>
-            <section class="opt" data-opt="category_id" data-opt-name="Category ID" data-opt-type="filter" data-opt-example="721" data-opt-doc="Numerical internal category ID filter."></section>
-            <section class="opt" data-opt="location" data-opt-name="Location" data-opt-type="filter" data-opt-example="*pool*" data-opt-doc="Case-insensitive location filter supporting wildcards."></section>
-            <section class="opt" data-opt="no_notifications" data-opt-name="Disable Notifications" data-opt-type="flag" data-opt-doc="Don't add global notifications as all-day events."></section>
-            <section class="opt" data-opt="fake_cancelled" data-opt-name="Fake Cancelled" data-opt-type="flag" data-opt-doc="Don't mark cancelled events as cancelled; just change the event title to include CANCELLED (this prevents cancelled events from disappearing on some calendar applications like Outlook and Apple Calendar)."></section>
-            <section class="opt" data-opt="delete_cancelled" data-opt-name="Delete Cancelled" data-opt-type="flag" data-opt-doc="Entirely delete cancelled events from the calendar (this can reduce clutter in some calendar applications)."></section>
-            <section class="opt" data-opt="describe_recurrence" data-opt-name="Describe Recurrence" data-opt-type="flag" data-opt-doc="Show detailed information about recurrences in the event descriptions."></section>
+        <aside class="options">
+            <section data-opt="activity" data-opt-name="Activity" data-opt-type="filter" data-opt-example="*badminton" data-opt-doc="Case-insensitive activity name filter supporting wildcards."></section>
+            <section data-opt="activity_id" data-opt-name="Activity ID" data-opt-type="filter" data-opt-example="00000000000000000000000000000000" data-opt-doc="Case-insensitive internal activity UUID filter."></section>
+            <section data-opt="category" data-opt-name="Category" data-opt-type="filter" data-opt-example="lane swim schedules" data-opt-doc="Case-insensitive internal category name filter."></section>
+            <section data-opt="category_id" data-opt-name="Category ID" data-opt-type="filter" data-opt-example="721" data-opt-doc="Numerical internal category ID filter."></section>
+            <section data-opt="location" data-opt-name="Location" data-opt-type="filter" data-opt-example="*pool*" data-opt-doc="Case-insensitive location filter supporting wildcards."></section>
+            <section data-opt="no_notifications" data-opt-name="Disable Notifications" data-opt-type="flag" data-opt-doc="Don't add global notifications as all-day events."></section>
+            <section data-opt="fake_cancelled" data-opt-name="Fake Cancelled" data-opt-type="flag" data-opt-doc="Don't mark cancelled events as cancelled; just change the event title to include CANCELLED (this prevents cancelled events from disappearing on some calendar applications like Outlook and Apple Calendar)."></section>
+            <section data-opt="delete_cancelled" data-opt-name="Delete Cancelled" data-opt-type="flag" data-opt-doc="Entirely delete cancelled events from the calendar (this can reduce clutter in some calendar applications)."></section>
+            <section data-opt="describe_recurrence" data-opt-name="Describe Recurrence" data-opt-type="flag" data-opt-doc="Show detailed information about recurrences in the event descriptions."></section>
         </aside>
-        <main id="calendar">
-            <aside id="error" hidden></aside>
+        <main>
+            <section class="error" hidden></section>
+            <section class="calendar"></section>
         </main>
     </div>
     <script src="https://unpkg.com/ical.js@1.5.0/build/ical.min.js"></script>
@@ -182,7 +344,7 @@
             const app = document.getElementById("app")
 
             // query string handling
-            const query = app.querySelector("#query")
+            const query = app.querySelector("nav.toolbar > input.query")
             const paramsUpdated = []
             const onParamsUpdated = fn => {
                 if (fn) {
@@ -234,7 +396,7 @@
             query.addEventListener("input", () => updateSearch(query.value))
 
             // options
-            for (const el of app.querySelectorAll("#opts > .opt[data-opt]")) {
+            for (const el of app.querySelectorAll("aside.options > section[data-opt]")) {
                 const opt = {
                     query: el.dataset.opt,
                     name: el.dataset.optName ?? el.dataset.opt,
@@ -279,11 +441,14 @@
                             el_item.appendChild(el_item_input)
 
                             const el_item_btn_include = document.createElement("button")
-                            el_item_btn_include.textContent = "Include"
+                            el_item_btn_include.classList.add("primary")
+                            el_item_btn_include.textContent = "+"
+                            el_item_btn_include.title = "Include"
                             el_item.appendChild(el_item_btn_include)
 
                             const el_item_btn_exclude = document.createElement("button")
-                            el_item_btn_exclude.textContent = "Exclude"
+                            el_item_btn_exclude.textContent = "-"
+                            el_item_btn_exclude.title = "Exclude"
                             el_item.appendChild(el_item_btn_exclude)
 
                             el_item_input.addEventListener("keydown", ev => {
@@ -332,6 +497,7 @@
                             el_item.appendChild(el_item_input)
 
                             const el_item_btn_remove = document.createElement("button")
+                            el_item_btn_remove.classList.add("delete")
                             el_item_btn_remove.textContent = "x"
                             el_item.appendChild(el_item_btn_remove)
 
@@ -352,23 +518,25 @@
                     el.appendChild(el_label)
 
                     const el_cb = document.createElement("input")
-                    el_cb.classList.add("opt__cb")
                     el_cb.id = `val_${opt.query}`
                     el_cb.autocomplete = "off"
                     el_cb.type = "checkbox"
                     el_cb.name = opt.query
                     el_label.appendChild(el_cb)
 
+                    const el_right = document.createElement("div")
+                    el_label.appendChild(el_right)
+
                     const el_name = document.createElement("div")
                     el_name.classList.add("opt__name")
                     el_name.textContent = opt.name
-                    el_label.appendChild(el_name)
+                    el_right.appendChild(el_name)
 
                     if (opt.doc) {
                         const el_doc = document.createElement("div")
                         el_doc.classList.add("opt__doc")
                         el_doc.textContent = opt.doc
-                        el_label.appendChild(el_doc)
+                        el_right.appendChild(el_doc)
                     }
 
                     onParamsUpdated(params => {
@@ -398,18 +566,18 @@
                 return url.toString()
             }
 
-            const btn_opts = app.querySelector("#btn_opts")
+            const btn_opts = app.querySelector("nav.toolbar > button.options")
             btn_opts.addEventListener("click", () => {
-                app.classList.toggle("app--opts-expanded")
+                app.classList.toggle("options-expanded")
             })
 
-            const btn_ics = app.querySelector("#btn_ics")
+            const btn_ics = app.querySelector("nav.toolbar > button.subscribe")
             btn_ics.addEventListener("click", () => {
                 prompt("Subscribe to the following link in your calendar application.", icsURL())
             })
 
-            const errorEl = app.querySelector("#error")
-            const calendar = new FullCalendar.Calendar(app.querySelector("#calendar").appendChild(document.createElement("div")), {
+            const errorEl = app.querySelector("main > section.error")
+            const calendar = new FullCalendar.Calendar(app.querySelector("main > section.calendar"), {
                 initialView: "listWeek",
                 height: "100%",
                 headerToolbar: {
@@ -481,7 +649,7 @@
                 }
             })
         } catch (ex) {
-            const errorEl = document.getElementById("error")
+            const errorEl = document.querySelector("#app > main > section.error")
             errorEl.hidden = false
             errorEl.textContent = `${ex}`
         }

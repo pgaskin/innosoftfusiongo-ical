@@ -21,6 +21,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/pgaskin/innosoftfusiongo-ical/fusiongo"
 	"github.com/pgaskin/innosoftfusiongo-ical/ifgical"
 	"github.com/pgaskin/innosoftfusiongo-ical/vtimezone"
@@ -41,6 +42,7 @@ var (
 	Testdata          = flag.String("testdata", "", "Path to directory containing school%d/*.json files to test with")
 	Timezone          = flag_TimezoneMap("timezone", make(TimezoneMap), "Default timezone name (used when it can't be detected from facilities), plus optional comma-separated schoolID=timezone override pairs.")
 	NoTimezoneFinder  = flag.Bool("no-timezone-finder", false, "Disable automatic timezone detection")
+	NoGzip            = flag.Bool("no-gzip", false, "Disable automatic gzip response compression")
 )
 
 func flag_Level(name string, value slog.Level, usage string) *slog.Level {
@@ -226,10 +228,24 @@ func handle(w http.ResponseWriter, r *http.Request) {
 					handleWeb(w, r, int(schoolID))
 					return
 				case "ics":
-					handleCalendar(w, r, int(schoolID), false)
+					h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						handleCalendar(w, r, int(schoolID), false)
+					})
+					if *NoGzip {
+						h.ServeHTTP(w, r)
+					} else {
+						gzhttp.GzipHandler(h).ServeHTTP(w, r)
+					}
 					return
 				case "json":
-					handleCalendar(w, r, int(schoolID), true)
+					h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						handleCalendar(w, r, int(schoolID), true)
+					})
+					if *NoGzip {
+						h.ServeHTTP(w, r)
+					} else {
+						gzhttp.GzipHandler(h).ServeHTTP(w, r)
+					}
 					return
 				}
 				handleError(w, r, http.StatusNotFound, "No handler for extension %q", ext)

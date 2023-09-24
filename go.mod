@@ -3,6 +3,7 @@ module github.com/pgaskin/innosoftfusiongo-ical
 go 1.21
 
 require (
+	github.com/klauspost/compress v1.17.0
 	github.com/ringsaturn/tzf v0.14.0
 	github.com/tidwall/gjson v1.16.0
 )

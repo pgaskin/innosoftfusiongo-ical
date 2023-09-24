@@ -27,14 +27,14 @@ type Data struct {
 
 // Calendar stores processed Innosoft Fusion Go schedule data.
 type Calendar struct {
-	id   int                                // school id
-	tz   *time.Location                     // for local times
-	tzV  []byte                             // VTimezone
-	sch  map[activityKey][]activityInstance // stable-sorted by date, all activityInstances fall on a activityKey.Weekday
-	schK []activityKey                      // stable-sorted keys of sch
-	schT time.Time                          // last modified
-	not  []notificationInstance             // stable-sorted by id
-	notT time.Time                          // last modified
+	id   int                                 // school id
+	tz   *time.Location                      // for local times
+	tzV  []byte                              // VTimezone
+	sch  map[activityKey]activityRecurrences // stable-sorted by date, all activityInstances fall on a activityKey.Weekday
+	schK []activityKey                       // stable-sorted keys of sch
+	schT time.Time                           // last modified
+	not  []notificationInstance              // stable-sorted by id
+	notT time.Time                           // last modified
 }
 
 // activityKey contains fields common to all instances (i.e., a base
@@ -43,7 +43,7 @@ type activityKey struct {
 	ActivityID string
 	Location   string
 	StartTime  fusiongo.Time
-	Weekday    [7]bool
+	Weekday    weekdayMapOf[bool]
 }
 
 // activityInstance contains fields specific to an instance.
@@ -55,6 +55,13 @@ type activityInstance struct {
 	EndTime     fusiongo.Time
 	Categories  []string
 	CategoryIDs []string
+}
+
+// activityRecurrences contains information about activity recurrences.
+type activityRecurrences struct {
+	Base      activityInstance
+	Weekday   weekdayMapOf[bool]
+	Instances []activityInstance // sorted, len(Instances) >= 1, no recurrence if == 1
 }
 
 // notificationInstance contains information about a notification.
@@ -127,32 +134,33 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 	c.schT = schedule.Updated
 
 	// collect activity instance event info and group into recurrence groups
-	c.sch = mapGroupInto(schedule.Activities, func(i int, fai fusiongo.ActivityInstance) (activityKey, activityInstance) {
-		ak := activityKey{
-			ActivityID: fai.ActivityID,
-			StartTime:  fai.Time.TimeRange.Start,
-			Location:   fai.Location,
-		}
-		ai := activityInstance{
-			IsCancelled: fai.IsCancelled,
-			Activity:    fai.Activity,
-			Description: fai.Description,
-			Date:        fai.Time.Date,
-			EndTime:     fai.Time.TimeRange.End,
-			Categories:  schedule.Categories[i].Category,
-			CategoryIDs: schedule.Categories[i].CategoryID,
-		}
-		return ak, ai
-	})
+	sch := remap(
 
-	// split out days which consistently have different end times
-	{
-		sch := map[activityKey][]activityInstance{}
-		for activityKey, activityInstances := range c.sch {
+		// first, do it by the unique fields other than the date
+		mapGroupInto(schedule.Activities, func(i int, fai fusiongo.ActivityInstance) (activityKey, activityInstance) {
+			ak := activityKey{
+				ActivityID: fai.ActivityID,
+				StartTime:  fai.Time.TimeRange.Start,
+				Location:   fai.Location,
+			}
+			ai := activityInstance{
+				IsCancelled: fai.IsCancelled,
+				Activity:    fai.Activity,
+				Description: fai.Description,
+				Date:        fai.Time.Date,
+				EndTime:     fai.Time.TimeRange.End,
+				Categories:  schedule.Categories[i].Category,
+				CategoryIDs: schedule.Categories[i].CategoryID,
+			}
+			return ak, ai
+		}),
+
+		// then regroup it by the weekday, splitting days with consistently different end times
+		func(ak activityKey, ai []activityInstance, sch map[activityKey][]activityInstance) {
 
 			// group the activities by their weekday
-			actByWeekday := weekdayGroupBy(activityInstances, func(i int, ai activityInstance) time.Weekday {
-				return ai.Date.WithTime(activityKey.StartTime).Weekday()
+			actByWeekday := weekdayGroupBy(ai, func(i int, ai activityInstance) time.Weekday {
+				return ai.Date.WithTime(ak.StartTime).Weekday()
 			})
 
 			// get the most common end time for each weekday
@@ -169,21 +177,17 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 
 			// re-group the activities including the weekday split
 			for _, wds := range weekdaysByEt {
-				activityKeyNew := activityKey
+				activityKeyNew := ak
 				activityKeyNew.Weekday = wds
 				sch[activityKeyNew] = flatFilter(actByWeekday[:], func(i int) bool {
 					return wds[i]
 				})
 			}
-		}
-		c.sch = sch
-	}
+		},
+	)
 
 	// get the activity keys
-	c.schK = mapKeys(c.sch)
-
-	// deterministically sort the map
-	slices.SortStableFunc(c.schK, func(a, b activityKey) int {
+	c.schK = mapKeysSortedFunc(sch, func(a, b activityKey) int {
 		return cmpMulti(
 			cmp.Compare(a.ActivityID, b.ActivityID),
 			a.StartTime.Compare(b.StartTime),
@@ -195,13 +199,82 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 			cmp.Compare(fmt.Sprint(a.Weekday), fmt.Sprint(b.Weekday)),
 		)
 	})
+
+	// deterministically sort the instances
 	for _, ak := range c.schK {
-		slices.SortStableFunc(c.sch[ak], func(a, b activityInstance) int {
+		slices.SortStableFunc(sch[ak], func(a, b activityInstance) int {
 			return a.Date.Compare(b.Date)
 		})
 	}
 
+	// build the recurrence information
+	c.sch = make(map[activityKey]activityRecurrences, len(c.schK))
+	for _, ak := range c.schK {
+		ais := sch[ak]
+
+		// set the fields to the first (for determinism) most common values
+		c.sch[ak] = activityRecurrences{
+			Weekday:   ak.Weekday,
+			Instances: ais,
+			Base: activityInstance{
+
+				// set the fields to the first (for determinism) most common values
+				Activity: mostCommonBy(ais, func(ai activityInstance) string {
+					return ai.Activity
+				}),
+				Description: mostCommonBy(ais, func(ai activityInstance) string {
+					return ai.Description
+				}),
+				EndTime: mostCommonBy(ais, func(ai activityInstance) fusiongo.Time {
+					return ai.EndTime
+				}),
+				Categories: strings.Split(mostCommonBy(ais, func(v activityInstance) string {
+					return strings.Join(v.Categories, "\x00") // HACK
+				}), "\x00"),
+				CategoryIDs: strings.Split(mostCommonBy(ais, func(v activityInstance) string {
+					return strings.Join(v.CategoryIDs, "\x00") // HACK
+				}), "\x00"),
+
+				// use the earliest date
+				Date: ais[0].Date,
+
+				// cancellation should only be set on exceptions
+				IsCancelled: false,
+			},
+		}
+	}
+
 	return nil
+}
+
+// Recur returns true if r recurs.
+func (r activityRecurrences) Recur() bool {
+	return len(r.Instances) != 1
+}
+
+// Iter iterates over recurrences for r.
+func (r activityRecurrences) Iter(fn func(d fusiongo.Date, ex bool, i int)) {
+	for d := r.Base.Date; !r.Instances[len(r.Instances)-1].Date.Less(d); d = d.AddDays(1) {
+		if r.Weekday[d.Weekday()] {
+			ex, i := true, slices.IndexFunc(r.Instances, func(ai activityInstance) bool {
+				return ai.Date == d
+			})
+			if i != -1 {
+				ai, aib := r.Instances[i], r.Base
+				switch {
+				case ai.IsCancelled != aib.IsCancelled:
+				case ai.Activity != aib.Activity:
+				case ai.Description != aib.Description:
+				case ai.EndTime != aib.EndTime:
+				case !slices.Equal(ai.Categories, aib.Categories):
+				case !slices.Equal(ai.CategoryIDs, aib.CategoryIDs):
+				default:
+					ex = false // no difference
+				}
+			}
+			fn(d, ex, i)
+		}
+	}
 }
 
 func (c *Calendar) initNotifications(notifications *fusiongo.Notifications) error {
@@ -307,7 +380,7 @@ func (c *Calendar) Render(o Options) []byte {
 		if o.ActivityID != nil && !o.ActivityID.Match(ak.ActivityID) {
 			continue
 		}
-		for i, ai := range c.sch[ak] {
+		for i, ai := range c.sch[ak].Instances {
 			if o.DeleteCancelled && ai.IsCancelled {
 				continue
 			}
@@ -321,7 +394,7 @@ func (c *Calendar) Render(o Options) []byte {
 				continue
 			}
 			if _, ok := schFilter[ak]; !ok {
-				schFilter[ak] = make([]bool, len(c.sch[ak]))
+				schFilter[ak] = make([]bool, len(c.sch[ak].Instances))
 			}
 			schFilter[ak][i] = true
 		}
@@ -361,7 +434,7 @@ func (c *Calendar) Render(o Options) []byte {
 		if _, include := schFilter[ak]; !include {
 			continue
 		}
-		ais := c.sch[ak]
+		ar := c.sch[ak]
 
 		// get the iCalendar (2-letter uppercase) days the instances occurs on
 		akDays := weekdayFilterMap(ak.Weekday, func(wd time.Weekday, x bool) (string, bool) {
@@ -380,51 +453,14 @@ func (c *Calendar) Render(o Options) []byte {
 			c.id,
 		)
 
-		// base and last instances, recurrence (ignoring filters)
-		var (
-			aiBase = ais[0]
-			aiLast = ais[len(ais)-1]
-			recur  func(fn func(d fusiongo.Date, ex bool, i int)) // iterates over recurrence dates, using (d, true, -1) for exclusions, and setting ex if aiBase != ais[ai]
-		)
-		if len(ais) > 1 {
-
-			// set the fields to the first (for determinism) most common values
-			aiBase.EndTime = mostCommonBy(ais, func(ai activityInstance) fusiongo.Time {
-				return ai.EndTime
-			})
-			aiBase.Activity = mostCommonBy(ais, func(ai activityInstance) string {
-				return ai.Activity
-			})
-			aiBase.Description = mostCommonBy(ais, func(ai activityInstance) string {
-				return ai.Description
-			})
-			aiBase.IsCancelled = false // cancellation should only be set on exceptions
-
-			// set the recurrence function
-			recur = func(fn func(d fusiongo.Date, ex bool, i int)) {
-				for d := aiBase.Date; !aiLast.Date.Less(d); d = d.AddDays(1) {
-					if ak.Weekday[d.Weekday()] {
-						if i := slices.IndexFunc(ais, func(ai activityInstance) bool {
-							return ai.Date == d
-						}); i != -1 {
-							ai := ais[i]
-							fn(d, ai.EndTime != aiBase.EndTime || ai.Activity != aiBase.Activity || ai.Description != aiBase.Description || ai.IsCancelled, i)
-						} else {
-							fn(d, true, -1)
-						}
-					}
-				}
-			}
-		}
-
 		// describe recurrence information if enabled
 		var excDesc strings.Builder
-		if o.DescribeRecurrence && recur != nil {
+		if o.DescribeRecurrence && ar.Recur() {
 			excDesc.WriteString("\n\n")
 			excDesc.WriteString("Repeats ")
 			excDesc.WriteString(ak.StartTime.StringCompact())
 			excDesc.WriteString(" - ")
-			excDesc.WriteString(aiBase.EndTime.StringCompact())
+			excDesc.WriteString(ar.Base.EndTime.StringCompact())
 			if slices.Contains(ak.Weekday[:], false) {
 				excDesc.WriteString(" [")
 				for i, x := range akDays {
@@ -435,7 +471,7 @@ func (c *Calendar) Render(o Options) []byte {
 				}
 				excDesc.WriteString("]")
 			}
-			recur(func(d fusiongo.Date, ex bool, i int) {
+			ar.Iter(func(d fusiongo.Date, ex bool, i int) {
 				if ex {
 					var (
 						hasDiff bool
@@ -449,24 +485,27 @@ func (c *Calendar) Render(o Options) []byte {
 						diff = "does not match filter"
 						hasDiff = true
 					} else {
-						ai := ais[i]
+						ai := ar.Instances[i]
 						switch {
 						case ai.IsCancelled:
 							diff = "cancelled"
 							hasDiff = true
-						case ai.EndTime != aiBase.EndTime:
+						case ai.EndTime != ar.Base.EndTime:
 							diff = "ends at " + ai.EndTime.StringCompact()
 							hasDiff = true
 						default:
 							diff = "differs"
 						}
-						if ai.Activity != aiBase.Activity {
+						if ai.Activity != ar.Base.Activity {
 							diffs = append(diffs, "name="+strconv.Quote(ai.Activity))
 							hasDiff = true
 						}
-						if ai.Description != aiBase.Description {
+						if ai.Description != ar.Base.Description {
 							diffs = append(diffs, "description="+strconv.Quote(ai.Description))
 							hasDiff = true
+						}
+						if !slices.Equal(ai.Categories, ar.Base.Categories) {
+							diffs = append(diffs, "categories="+fmt.Sprintf("%q", ai.Categories))
 						}
 					}
 					if hasDiff {
@@ -495,7 +534,7 @@ func (c *Calendar) Render(o Options) []byte {
 			b = icalAppendPropDateTimeUTC(b, "DTSTAMP", fusiongo.GoDateTime(c.schT.UTC())) // this should be when the event was created, but unfortunately, we can't determine that deterministically, so just use the schedule update time
 
 			// write event status information if it's the only event or a recurrence exception
-			if recur == nil || !base {
+			if !ar.Recur() || !base {
 				if !ai.IsCancelled {
 					b = icalAppendPropText(b, "SUMMARY", ai.Activity)
 				} else {
@@ -522,14 +561,14 @@ func (c *Calendar) Render(o Options) []byte {
 			}
 
 			// write recurrence info if it's a recurring event
-			if recur != nil {
+			if ar.Recur() {
 				if base {
 					b = icalAppendPropRaw(b, "RRULE", fmt.Sprintf(
 						"FREQ=WEEKLY;INTERVAL=1;UNTIL=%s;BYDAY=%s",
-						string(icalAppendDateTimeUTC(nil, fusiongo.GoDateTime(ak.StartTime.WithEnd(aiLast.EndTime).WithDate(aiLast.Date).End().In(time.Local).UTC()))),
+						string(icalAppendDateTimeUTC(nil, fusiongo.GoDateTime(ak.StartTime.WithEnd(ar.Instances[len(ar.Instances)-1].EndTime).WithDate(ar.Instances[len(ar.Instances)-1].Date).End().In(time.Local).UTC()))),
 						strings.Join(akDays, ","),
 					))
-					recur(func(d fusiongo.Date, _ bool, i int) {
+					ar.Iter(func(d fusiongo.Date, _ bool, i int) {
 						if i == -1 || !schFilter[ak][i] {
 							b = icalAppendPropDateTimeLocal(b, "EXDATE", ak.StartTime.WithDate(d), c.tz)
 						}
@@ -544,14 +583,18 @@ func (c *Calendar) Render(o Options) []byte {
 		}
 
 		// write the base event
-		writeEvent(aiBase, true)
+		if ar.Recur() {
+			writeEvent(ar.Base, true)
+		} else {
+			writeEvent(ar.Instances[0], true)
+		}
 
 		// write recurrence exceptions
-		if recur != nil {
-			recur(func(_ fusiongo.Date, ex bool, i int) {
+		if ar.Recur() {
+			ar.Iter(func(_ fusiongo.Date, ex bool, i int) {
 				if ex {
 					if i != -1 && schFilter[ak][i] {
-						writeEvent(ais[i], false)
+						writeEvent(ar.Instances[i], false)
 					}
 				}
 			})
@@ -594,6 +637,13 @@ func mapKeys[T comparable, U any](m map[T]U) []T {
 	for k := range m {
 		ks = append(ks, k)
 	}
+	return ks
+}
+
+// mapKeysSortedFunc returns a stable-sorted slice of map keys.
+func mapKeysSortedFunc[T comparable, U any](m map[T]U, cmp func(T, T) int) []T {
+	ks := mapKeys(m)
+	slices.SortStableFunc(ks, cmp)
 	return ks
 }
 
@@ -650,6 +700,22 @@ func filterMap[T, U any](xs []T, fn func(int, T) (U, bool)) []U {
 		}
 	}
 	return slices.Clip(xn)
+}
+
+// remap iterates over a map, building a new one.
+func remap[K comparable, V any](m map[K]V, fns ...func(K, V, map[K]V)) map[K]V {
+	for _, fn := range fns {
+		n := map[K]V{}
+		for k, v := range m {
+			if fn != nil {
+				fn(k, v, n)
+			} else {
+				n[k] = v
+			}
+		}
+		m = n
+	}
+	return m
 }
 
 // mapGroupInto groups xs by arbitrary keys, converting the values.

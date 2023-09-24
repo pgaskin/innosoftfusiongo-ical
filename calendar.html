@@ -333,12 +333,10 @@
             <section class="calendar"></section>
         </main>
     </div>
-    <script src="https://unpkg.com/ical.js@1.5.0/build/ical.min.js"></script>
     <script src="https://unpkg.com/@fullcalendar/core@6.1.8/index.global.min.js"></script>
     <script src="https://unpkg.com/@fullcalendar/list@6.1.8/index.global.min.js"></script>
     <script src="https://unpkg.com/@fullcalendar/daygrid@6.1.8/index.global.min.js"></script>
     <script src="https://unpkg.com/@fullcalendar/timegrid@6.1.8/index.global.min.js"></script>
-    <script src="https://unpkg.com/@fullcalendar/icalendar@6.1.8/index.global.min.js"></script>
     <script>
         try {
             const app = document.getElementById("app")
@@ -559,10 +557,10 @@
                 throw new TypeError(`Invalid option type ${opt.type} for option ${opt.query}`)
             }
 
-            const icsURL = () => {
+            const calURL = ext => {
                 const url = new URL(window.location)
                 url.hash = ""
-                url.pathname = url.pathname.replace(/\.html$/, "") + ".ics"
+                url.pathname = url.pathname.replace(/\.html$/, "") + "." + ext
                 return url.toString()
             }
 
@@ -573,10 +571,9 @@
 
             const btn_ics = app.querySelector("nav.toolbar > button.subscribe")
             btn_ics.addEventListener("click", () => {
-                prompt("Subscribe to the following link in your calendar application.", icsURL())
+                prompt("Subscribe to the following link in your calendar application.", calURL("ics"))
             })
 
-            const errorEl = app.querySelector("main > section.error")
             const calendar = new FullCalendar.Calendar(app.querySelector("main > section.calendar"), {
                 initialView: "listWeek",
                 height: "100%",
@@ -621,22 +618,67 @@
 
                     return { domNodes }
                 },
-                eventSourceSuccess() {
-                    errorEl.hidden = true
-                },
-                eventSourceFailure(error) {
-                    errorEl.textContent = `${error}`
-                    errorEl.hidden = false
-                },
             })
             calendar.render()
 
+            const fetchCalendar = async url => {
+                const resp = await fetch(url)
+                if (resp.status != 200) {
+                    let err = new Error(`Response status ${resp.status} (${resp.statusText})`)
+                    try {
+                        err = new Error(await resp.text())
+                    } catch (ex) {
+                        console.warn(ex)
+                    }
+                    console.warn(err)
+                    throw err
+                }
+                const obj = await resp.json()
+                const schedule = obj.schedule?.flatMap(sch => sch.instances.map(ai => ({
+                    activityID: sch.activityID,
+                    startTime: sch.startTime,
+                    location: sch.location,
+                    ...sch.base,
+                    ...ai,
+                    recurrenceDescription: sch.recurrenceDescription,
+                })).filter(({isException, isExclusion}) => !isExclusion).map(ai => ({
+                    title: ai.activity,
+                    start: ai._start_at,
+                    end: ai._end_at,
+                    allDay: false,
+                    extendedProps: {
+                        description: ai.description + (ai.recurrenceDescription ? "\n\n" + ai.recurrenceDescription : ""),
+                        location: ai.location,
+                    },
+                })))
+                const notifications = obj.notifications?.map(ni => ({
+                    title: ni.text,
+                    start: ni.sent_at,
+                    allDay: true,
+                    extendedProps: {
+                        description: ni.text,
+                    },
+                }))
+                return [
+                    ...(schedule ?? []),
+                    ...(notifications ?? []),
+                ]
+            }
+
+            const errorEl = document.querySelector("#app > main > section.error")
             const reload = () => {
                 calendar.getEventSources().forEach(x => x.remove())
-                calendar.addEventSource({
-                    url: icsURL(),
-                    format: `ics`,
-                })
+                fetchCalendar(calURL("json")).then(
+                    events => {
+                        calendar.addEventSource({ events })
+                        errorEl.hidden = true
+                        errorEl.textContent = ""
+                    },
+                    err => {
+                        errorEl.hidden = false
+                        errorEl.textContent = `${err}`
+                    },
+                )
             }
 
             let debounce

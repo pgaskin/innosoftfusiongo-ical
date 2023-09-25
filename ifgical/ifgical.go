@@ -710,7 +710,7 @@ func (c *Calendar) RenderFullCalendarJSON(o Options) []byte {
 					rd = "\n\n" + rd
 				}
 			}
-			ar.Iter(func(_ fusiongo.Date, _ bool, i int) {
+			ar.Iter(func(_ fusiongo.Date, ex bool, i int) {
 				if i != -1 && schFilter[ak][i] {
 					ai := ar.Instances[i]
 					if !ai.IsCancelled || !o.DeleteCancelled {
@@ -722,6 +722,8 @@ func (c *Calendar) RenderFullCalendarJSON(o Options) []byte {
 						b = jsonObject(jsonKey(b, "extendedProps"), '{')
 						b = jsonStr(jsonKey(b, "description"), ai.Description+rd) // same as icalendar plugin
 						b = jsonStr(jsonKey(b, "location"), ak.Location)          // same as icalendar plugin
+						b = jsonBool(jsonKey(b, "isRecurrence"), ar.Recur())      // custom
+						b = jsonBool(jsonKey(b, "isException"), ex)               // custom
 						b = jsonObject(b, '}')
 						b = jsonObject(b, '}')
 					}

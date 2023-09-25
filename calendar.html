@@ -391,7 +391,14 @@
                 return url.searchParams
             }
             query.value = decodeURIComponent(window.location.search.substring(1))
-            query.addEventListener("input", () => updateSearch(query.value))
+
+            let debounce
+            query.addEventListener("input", () => {
+                if (debounce !== undefined) {
+                    window.clearTimeout(debounce)
+                }
+                debounce = window.setTimeout(() => updateSearch(query.value), 150)
+            })
 
             // options
             for (const el of app.querySelectorAll("aside.options > section[data-opt]")) {
@@ -621,8 +628,8 @@
             })
             calendar.render()
 
-            const fetchCalendar = async url => {
-                const resp = await fetch(url)
+            const fetchCalendar = async (url, signal) => {
+                const resp = await fetch(url, { signal })
                 if (resp.status != 200) {
                     let err = new Error(`Response status ${resp.status} (${resp.statusText})`)
                     try {
@@ -637,30 +644,34 @@
             }
 
             const errorEl = document.querySelector("#app > main > section.error")
+
+            let controller
             const reload = () => {
+                if (controller !== undefined) {
+                    controller.abort()
+                }
+                let thisController = new AbortController()
+                controller = thisController
+
                 calendar.getEventSources().forEach(x => x.remove())
-                fetchCalendar(calURL("fc.json")).then(
+                fetchCalendar(calURL("fc.json"), controller.signal).then(
                     events => {
-                        calendar.addEventSource({ events })
-                        errorEl.hidden = true
-                        errorEl.textContent = ""
+                        if (!thisController.signal.aborted) {
+                            calendar.addEventSource({ events })
+                            errorEl.hidden = true
+                            errorEl.textContent = ""
+                        }
                     },
                     err => {
-                        errorEl.hidden = false
-                        errorEl.textContent = `${err}`
+                        if (!thisController.signal.aborted) {
+                            errorEl.hidden = false
+                            errorEl.textContent = `${err}`
+                        }
                     },
                 )
             }
 
-            let debounce
-            onParamsUpdated(params => {
-                if (debounce !== undefined) {
-                    window.clearTimeout(debounce)
-                    debounce = window.setTimeout(() => reload(), 250)
-                } else {
-                    debounce = window.setTimeout(() => reload(), 1)
-                }
-            })
+            onParamsUpdated(params => reload())
         } catch (ex) {
             const errorEl = document.querySelector("#app > main > section.error")
             errorEl.hidden = false

@@ -345,45 +345,9 @@ type Options struct {
 
 	// List recurrence info and exceptions in event description.
 	DescribeRecurrence bool
-
-	// Dump everything as JSON instead.
-	JSON bool
 }
 
-// Render renders c as an iCalendar object. It is safe for concurrent use.
-//
-// The output is designed to be compatible with most calendar applications,
-// including:
-//
-//   - Microsoft Exchange Server (OWA)
-//   - Microsoft Outlook
-//   - Google Calendar
-//   - ICSx5/iCal4j
-//   - Apple Calendar (iCloud, iOS, macOS)
-//   - Thunderbird
-//
-// It is compliant with the following specifications (the MS one is generally a
-// subset of the RFCs, and for the common properties, the intersection of it
-// with the RFCs is close to the lowest common denominator of most clients):
-//
-//   - https://datatracker.ietf.org/doc/html/rfc5545
-//   - https://datatracker.ietf.org/doc/html/rfc6868
-//   - https://datatracker.ietf.org/doc/html/rfc7986
-//   - https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxcical/a685a040-5b69-4c84-b084-795113fb4012
-//
-// In particular, VTimezone objects and RRULEs are limited to a strict subset to
-// ensure compatibility.
-//
-// Some notes about the output if JSON output is used:
-//   - As an internal convention, camelCase is used for keys, and underscores
-//     are used to show alternate representations of data.
-//   - Instances can be built by assigning properties from each instance in the
-//     instances array over the base instance.
-//   - All instances include the date, isException, and isExclusion.
-//   - If an activity does not recur, there will be exactly one instance, which
-//     will always be !isException and !isExclusion.
-//   - If isExclusion, then isException will be true.
-func (c *Calendar) Render(o Options) []byte {
+func (c *Calendar) filter(o Options) map[activityKey][]bool {
 	schFilter := map[activityKey][]bool{}
 	for _, ak := range c.schK {
 		if o.Location != nil && !o.Location.Match(ak.Location) {
@@ -411,13 +375,35 @@ func (c *Calendar) Render(o Options) []byte {
 			schFilter[ak][i] = true
 		}
 	}
-	if o.JSON {
-		return c.renderJSON(o, schFilter)
-	}
-	return c.renderICS(o, schFilter)
+	return schFilter
 }
 
-func (c *Calendar) renderICS(o Options, schFilter map[activityKey][]bool) []byte {
+// RenderICS renders c as an iCalendar object. It is safe for concurrent use.
+//
+// The output is designed to be compatible with most calendar applications,
+// including:
+//
+//   - Microsoft Exchange Server (OWA)
+//   - Microsoft Outlook
+//   - Google Calendar
+//   - ICSx5/iCal4j
+//   - Apple Calendar (iCloud, iOS, macOS)
+//   - Thunderbird
+//
+// It is compliant with the following specifications (the MS one is generally a
+// subset of the RFCs, and for the common properties, the intersection of it
+// with the RFCs is close to the lowest common denominator of most clients):
+//
+//   - https://datatracker.ietf.org/doc/html/rfc5545
+//   - https://datatracker.ietf.org/doc/html/rfc6868
+//   - https://datatracker.ietf.org/doc/html/rfc7986
+//   - https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxcical/a685a040-5b69-4c84-b084-795113fb4012
+//
+// In particular, VTimezone objects and RRULEs are limited to a strict subset to
+// ensure compatibility.
+func (c *Calendar) RenderICS(o Options) []byte {
+	schFilter := c.filter(o)
+
 	b := icalAppendPropRaw(nil, "BEGIN", "VCALENDAR")
 
 	// basic stuff
@@ -573,7 +559,20 @@ func (c *Calendar) renderICS(o Options, schFilter map[activityKey][]bool) []byte
 	return b
 }
 
-func (c *Calendar) renderJSON(o Options, schFilter map[activityKey][]bool) []byte {
+// RenderJSON renders c as a JSON object. It is safe for concurrent use.
+//
+// Some notes about the output:
+//   - As an internal convention, camelCase is used for keys, and underscores
+//     are used to show alternate representations of data.
+//   - Instances can be built by assigning properties from each instance in the
+//     instances array over the base instance.
+//   - All instances include the date, isException, and isExclusion.
+//   - If an activity does not recur, there will be exactly one instance, which
+//     will always be !isException and !isExclusion.
+//   - If isExclusion, then isException will be true.
+func (c *Calendar) RenderJSON(o Options) []byte {
+	schFilter := c.filter(o)
+
 	b := jsonObject(nil, '{')
 
 	// timezone
@@ -690,6 +689,61 @@ func (c *Calendar) renderJSON(o Options, schFilter map[activityKey][]bool) []byt
 	b = jsonObject(b, ']')
 
 	return jsonObject(b, '}')
+}
+
+// RenderJSON renders c as a FullCalendar JSON EventSource. It is safe for
+// concurrent use.
+//
+// The output is compatible with the FullCalendar iCalendar plugin, and should
+// result in the same output as using it with RenderICS.
+func (c *Calendar) RenderFullCalendarJSON(o Options) []byte {
+	schFilter := c.filter(o)
+
+	b := jsonObject(nil, '[')
+
+	for _, ak := range c.schK {
+		if _, include := schFilter[ak]; include {
+			ar := c.sch[ak]
+			rd := ""
+			if o.DescribeRecurrence {
+				if rd = c.describeRecurrence(ak, schFilter); rd != "" {
+					rd = "\n\n" + rd
+				}
+			}
+			ar.Iter(func(_ fusiongo.Date, _ bool, i int) {
+				if i != -1 && schFilter[ak][i] {
+					ai := ar.Instances[i]
+					if !ai.IsCancelled || !o.DeleteCancelled {
+						b = jsonObject(b, '{')
+						b = jsonStr(jsonKey(b, "title"), ai.Activity)
+						b = jsonInt(jsonKey(b, "start"), ak.StartTime.WithDate(ai.Date).In(c.tz).UnixMilli())
+						b = jsonInt(jsonKey(b, "end"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).UnixMilli())
+						b = jsonBool(jsonKey(b, "allDay"), false)
+						b = jsonObject(jsonKey(b, "extendedProps"), '{')
+						b = jsonStr(jsonKey(b, "description"), ai.Description+rd) // same as icalendar plugin
+						b = jsonStr(jsonKey(b, "location"), ak.Location)          // same as icalendar plugin
+						b = jsonObject(b, '}')
+						b = jsonObject(b, '}')
+					}
+				}
+			})
+		}
+	}
+
+	if !o.NoNotifications {
+		for _, ni := range c.not {
+			b = jsonObject(b, '{')
+			b = jsonStr(jsonKey(b, "title"), ni.Text)
+			b = jsonInt(jsonKey(b, "start"), ni.Sent.In(c.tz).UnixMilli())
+			b = jsonBool(jsonKey(b, "allDay"), true)
+			b = jsonObject(jsonKey(b, "extendedProps"), '{')
+			b = jsonStr(jsonKey(b, "description"), ni.Text)
+			b = jsonObject(b, '}')
+			b = jsonObject(b, '}')
+		}
+	}
+
+	return jsonObject(b, ']')
 }
 
 func (c *Calendar) describeRecurrence(ak activityKey, schFilter map[activityKey][]bool) string {

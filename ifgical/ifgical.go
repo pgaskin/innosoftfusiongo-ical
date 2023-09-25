@@ -5,7 +5,6 @@ package ifgical
 import (
 	"cmp"
 	"crypto/sha1"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -13,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 	"unsafe"
 
 	"github.com/pgaskin/innosoftfusiongo-ical/fusiongo"
@@ -581,10 +579,10 @@ func (c *Calendar) RenderJSON(o Options) []byte {
 	// update times
 	b = jsonObject(jsonKey(b, "updated"), '{')
 	if !c.schT.IsZero() {
-		b = jsonAny(jsonKey(b, "schedule"), c.schT)
+		b = jsonTime(jsonKey(b, "schedule"), c.schT)
 	}
 	if !c.notT.IsZero() {
-		b = jsonAny(jsonKey(b, "notifications"), c.notT)
+		b = jsonTime(jsonKey(b, "notifications"), c.notT)
 	}
 	b = jsonObject(b, '}')
 
@@ -603,7 +601,7 @@ func (c *Calendar) RenderJSON(o Options) []byte {
 				b = jsonBool(jsonKey(b, "isException"), ex)
 				b = jsonBool(jsonKey(b, "isExclusion"), i == -1)
 			}
-			b = jsonAny(jsonKey(b, "date_at"), d.In(c.tz))
+			b = jsonTime(jsonKey(b, "date_at"), d.In(c.tz))
 			b = jsonStr(jsonKey(b, "date_weekday"), d.Weekday().String())
 			b = jsonInt(jsonKey(b, "date_weekday_num"), d.Weekday())
 
@@ -641,11 +639,11 @@ func (c *Calendar) RenderJSON(o Options) []byte {
 					b = jsonObject(b, ']')
 				}
 				b = jsonStr(jsonKey(b, "_start"), ak.StartTime.WithDate(ai.Date).String())
-				b = jsonAny(jsonKey(b, "_start_at"), ak.StartTime.WithDate(ai.Date).In(c.tz))
+				b = jsonTime(jsonKey(b, "_start_at"), ak.StartTime.WithDate(ai.Date).In(c.tz))
 				b = jsonStr(jsonKey(b, "_end"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().String())
-				b = jsonAny(jsonKey(b, "_end_at"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz))
+				b = jsonTime(jsonKey(b, "_end_at"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz))
 				b = jsonStr(jsonKey(b, "_duration"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).Sub(ak.StartTime.WithDate(ai.Date).In(c.tz)).Truncate(time.Second).String())
-				b = jsonAny(jsonKey(b, "_duration_secs"), int(ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).Sub(ak.StartTime.WithDate(ai.Date).In(c.tz)).Truncate(time.Second).Seconds()))
+				b = jsonInt(jsonKey(b, "_duration_secs"), int(ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).Sub(ak.StartTime.WithDate(ai.Date).In(c.tz)).Truncate(time.Second).Seconds()))
 			}
 		}
 
@@ -653,7 +651,11 @@ func (c *Calendar) RenderJSON(o Options) []byte {
 		b = jsonStr(jsonKey(b, "activityID"), ak.ActivityID)
 		b = jsonStr(jsonKey(b, "location"), ak.Location)
 		b = jsonStr(jsonKey(b, "startTime"), ak.StartTime.StringCompact())
-		b = jsonAny(jsonKey(b, "weekdays"), ar.Weekday)
+		b = jsonObject(jsonKey(b, "weekdays"), '[')
+		for _, x := range ar.Weekday {
+			b = jsonBool(b, x)
+		}
+		b = jsonObject(b, ']')
 		b = jsonObject(jsonKey(b, "base"), '{')
 		writeEvent(ar.Base.Date, false, -2)
 		b = jsonObject(b, '}')
@@ -682,7 +684,7 @@ func (c *Calendar) RenderJSON(o Options) []byte {
 			b = jsonStr(jsonKey(b, "id"), ni.ID)
 			b = jsonStr(jsonKey(b, "text"), ni.Text)
 			b = jsonStr(jsonKey(b, "sent"), ni.Sent.String())
-			b = jsonAny(jsonKey(b, "sent_at"), ni.Sent.In(c.tz))
+			b = jsonTime(jsonKey(b, "sent_at"), ni.Sent.In(c.tz))
 			b = jsonObject(b, '}')
 		}
 	}
@@ -1017,20 +1019,29 @@ func icalAppendTextValue(b []byte, ss ...string) []byte {
 			b = append(b, ',')
 		}
 		b = slices.Grow(b, len(s))
-		for i, c := range s {
-			switch c {
-			case '\r':
-				if i+1 == len(s) || s[i+1] != '\n' {
-					b = utf8.AppendRune(b, c)
-				}
-			case '\n':
-				b = append(b, '\\', 'n')
-			case '\\', ';', ',':
-				b = append(b, '\\', byte(c))
-			default:
-				b = utf8.AppendRune(b, c)
+		x := 0 // note: this won't break utf-8 since we only check for < 0x20
+		for i := 0; i < len(s); {
+			if s[i] == '\r' && i+1 != len(s) && s[i+1] == '\n' {
+				b = append(b, s[x:i]...)
+				// skip the \r since it's followed by a \n
+				i++
+				x = i
+				continue
 			}
+			if c := s[i]; c == '\n' || c == '\\' || c == ';' || c == ',' {
+				b = append(b, s[x:i]...)
+				if c == '\n' {
+					b = append(b, '\\', 'n')
+				} else {
+					b = append(b, '\\', c)
+				}
+				i++
+				x = i
+				continue
+			}
+			i++
 		}
+		b = append(b, s[x:]...)
 	}
 	return b
 }
@@ -1138,15 +1149,40 @@ func jsonFloat[T ~float32 | ~float64](b []byte, n T) []byte {
 }
 
 func jsonStr[T ~[]byte | ~string](b []byte, s T) []byte {
-	x, _ := json.Marshal(string(s))
-	return append(jsonObject(b, ':'), x...)
+	b = jsonObject(b, ':')
+	b = slices.Grow(b, len(s)+2)
+	b = append(b, '"')
+	x := 0 // note: this won't break utf-8 since we only check for < 0x20
+	for i := 0; i < len(s); {
+		if c := s[i]; c < 0x20 || c == '\\' || c == '"' {
+			b = append(b, s[x:i]...)
+			switch c {
+			case '\\', '"':
+				b = append(b, '\\', c)
+			case '\n':
+				b = append(b, '\\', 'n')
+			case '\r':
+				b = append(b, '\\', 'r')
+			case '\t':
+				b = append(b, '\\', 't')
+			default:
+				b = append(b, '\\', 'u', '0', '0', "0123456789abcdef"[c>>4], "0123456789abcdef"[c&0xF])
+			}
+			i++
+			x = i
+			continue
+		}
+		i++
+	}
+	b = append(b, s[x:]...)
+	b = append(b, '"')
+	return b
 }
 
-func jsonStrf(b []byte, format string, a ...any) []byte {
-	return jsonStr(b, fmt.Sprintf(format, a...))
-}
-
-func jsonAny(b []byte, v any) []byte {
-	x, _ := json.Marshal(v)
-	return append(jsonObject(b, ':'), x...)
+func jsonTime(b []byte, t time.Time) []byte {
+	x, err := t.MarshalText() // RFC3339
+	if err != nil {
+		panic(err)
+	}
+	return jsonStr(b, x)
 }

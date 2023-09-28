@@ -312,7 +312,7 @@
 <body>
     <div id="app" class="app">
         <nav class="toolbar">
-            <img src="favicon.ico">
+            <img src="favicon.ico" width="32" height="32" alt="icon">
             <button class="options options">Options</button>
             <input type="text" class="query" autocomplete="off" autocapitalize="off" placeholder="Options...">
             <button class="primary subscribe">Subscribe</button>
@@ -339,6 +339,49 @@
     <script src="https://unpkg.com/@fullcalendar/timegrid@6.1.8/index.global.min.js"></script>
     <script>
         try {
+            function makeElement(element, attr, child) {
+                if (!element) {
+                    element = document.createDocumentFragment()
+                } else if (typeof element === "string" || element instanceof String) {
+                    element = document.createElement(element)
+                }
+                if (attr) {
+                    for (const [k, v] of Object.entries(attr)) {
+                        if (v !== undefined) {
+                            if (!(typeof v === "string" || v instanceof String)) {
+                                if (k.startsWith("on")) {
+                                    element.addEventListener(k.substring(2), v)
+                                    continue
+                                } else if (k === "style" && typeof v === "object") {
+                                    for (const [k, x] of Object.entries(v)) {
+                                        element.style[k] = x
+                                    }
+                                    continue
+                                } else if (v === true) {
+                                    element.setAttribute(k, "")
+                                }
+                            }
+                            element.setAttribute(k, v)
+                        }
+                    }
+                }
+                if (child) {
+                    if (typeof child !== "array" && !(child instanceof Array)) {
+                        child = [child]
+                    }
+                    for (const x of child) {
+                        if (x) {
+                            if (typeof x === "string" || x instanceof String) {
+                                element.appendChild(document.createTextNode(x))
+                            } else {
+                                element.appendChild(x)
+                            }
+                        }
+                    }
+                }
+                return element
+            }
+
             const app = document.getElementById("app")
 
             // query string handling
@@ -411,157 +454,110 @@
                 }
                 el.classList.add(`opt--${opt.type}`)
 
-                if (opt.type == "filter") {
-                    const el_name = document.createElement("div")
-                    el_name.classList.add("opt__name")
-                    el_name.textContent = opt.name
-                    el.appendChild(el_name)
-
-                    if (opt.doc) {
-                        const el_doc = document.createElement("div")
-                        el_doc.classList.add("opt__doc")
-                        el_doc.textContent = opt.doc
-                        el.appendChild(el_doc)
-                    }
-
-                    const el_items = document.createElement("div")
-                    el_items.classList.add("opt_items")
-                    el.appendChild(el_items)
-
+                const frag = document.createDocumentFragment()
+                switch (opt.type) {
+                case "filter":
+                    let el_items, el_item_input
+                    frag.appendChild(makeElement("div", { class: "opt__name" }, `${opt.name}`))
+                    opt.doc && frag.appendChild(makeElement("div", { class: "opt__doc" }, `${opt.doc}`))
+                    el_items = frag.appendChild(makeElement("div", { class: "opt_items" }))
                     onParamsUpdated(params => {
-                        el_items.innerHTML = ""
-
-                        {
-                            const el_item = document.createElement("div")
-                            el_item.classList.add("opt__item")
-                            el_item.classList.add("opt__item--new")
-                            el_items.appendChild(el_item)
-
-                            const el_item_input = document.createElement("input")
-                            el_item_input.autocomplete = "off"
-                            el_item_input.autocapitalize = "off"
-                            if (opt.example) {
-                                el_item_input.placeholder = opt.example
-                            }
-                            el_item.appendChild(el_item_input)
-
-                            const el_item_btn_include = document.createElement("button")
-                            el_item_btn_include.classList.add("primary")
-                            el_item_btn_include.textContent = "+"
-                            el_item_btn_include.title = "Include"
-                            el_item.appendChild(el_item_btn_include)
-
-                            const el_item_btn_exclude = document.createElement("button")
-                            el_item_btn_exclude.textContent = "-"
-                            el_item_btn_exclude.title = "Exclude"
-                            el_item.appendChild(el_item_btn_exclude)
-
-                            el_item_input.addEventListener("keydown", ev => {
-                                if (ev.keyCode == 13) {
+                        const frag = document.createDocumentFragment()
+                        frag.appendChild(makeElement("div", { class: "opt__item opt__item--new" }, [
+                            el_item_input = makeElement("input", {
+                                autocomplete: "off",
+                                autocapitalize: "off",
+                                placeholder: opt.example ? `${opt.example}` : undefined,
+                                onkeydown(ev) {
+                                    if (ev.keyCode == 13) {
+                                        updateSearch(params => {
+                                            const flt = el_item_input.value.trim()
+                                            if (!params.getAll(opt.query).includes(flt)) {
+                                                params.append(opt.query, flt)
+                                            }
+                                            el_item_input.value = ""
+                                        })
+                                    }
+                                },
+                            }),
+                            makeElement("button", {
+                                class: "primary",
+                                title: "Include",
+                                onclick() {
                                     updateSearch(params => {
-                                        const flt = el_item_input.value.trim()
+                                        const flt = el_item_input.value.trim().replace(/^-/, "")
                                         if (!params.getAll(opt.query).includes(flt)) {
                                             params.append(opt.query, flt)
                                         }
                                         el_item_input.value = ""
                                     })
-                                }
-                            })
-
-                            el_item_btn_include.addEventListener("click", () => {
-                                updateSearch(params => {
-                                    const flt = el_item_input.value.trim().replace(/^-/, "")
-                                    if (!params.getAll(opt.query).includes(flt)) {
-                                        params.append(opt.query, flt)
-                                    }
-                                    el_item_input.value = ""
-                                })
-                            })
-
-                            el_item_btn_exclude.addEventListener("click", () => {
-                                updateSearch(params => {
-                                    const flt = "-" + el_item_input.value.trim().replace(/^-/, "")
-                                    if (!params.getAll(opt.query).includes(flt)) {
-                                        params.append(opt.query, flt)
-                                    }
-                                    el_item_input.value = ""
-                                })
-                            })
-                        }
-
+                                },
+                            }, "+"),
+                            makeElement("button", {
+                                title: "Exclude",
+                                onclick() {
+                                    updateSearch(params => {
+                                        const flt = "-" + el_item_input.value.trim().replace(/^-/, "")
+                                        if (!params.getAll(opt.query).includes(flt)) {
+                                            params.append(opt.query, flt)
+                                        }
+                                        el_item_input.value = ""
+                                    })
+                                },
+                            }, "-"),
+                        ]))
                         for (const item of params.getAll(opt.query)) {
-                            const el_item = document.createElement("div")
-                            el_item.classList.add("opt__item")
-                            el_items.appendChild(el_item)
-
-                            const el_item_input = document.createElement("input")
-                            el_item_input.value = item
-                            el_item_input.disabled = true
-                            el_item_input.autocomplete = "off"
-                            el_item_input.autocapitalize = "off"
-                            el_item.appendChild(el_item_input)
-
-                            const el_item_btn_remove = document.createElement("button")
-                            el_item_btn_remove.classList.add("delete")
-                            el_item_btn_remove.textContent = "x"
-                            el_item.appendChild(el_item_btn_remove)
-
-                            el_item_btn_remove.addEventListener("click", () => {
-                                updateSearch(params => {
-                                    urlSearchParamsDeleteKV(params, opt.query, el_item_input.value)
-                                })
-                            })
+                            frag.appendChild(makeElement("div", { class: "opt__item" }, [
+                                makeElement("input", {
+                                    value: item,
+                                    disabled: true,
+                                    autocomplete: "off",
+                                    autocapitalize: "off",
+                                }),
+                                makeElement("button", {
+                                    class: "delete",
+                                    onclick() {
+                                        updateSearch(params => {
+                                            urlSearchParamsDeleteKV(params, opt.query, item)
+                                        })
+                                    },
+                                }, "x")
+                            ]))
                         }
+                        el_items.replaceChildren(frag)
                     })
-
-                    continue
-                }
-
-                if (opt.type == "flag") {
-                    const el_label = document.createElement("label")
-                    el_label.htmlFor = `val_${opt.query}`
-                    el.appendChild(el_label)
-
-                    const el_cb = document.createElement("input")
-                    el_cb.id = `val_${opt.query}`
-                    el_cb.autocomplete = "off"
-                    el_cb.type = "checkbox"
-                    el_cb.name = opt.query
-                    el_label.appendChild(el_cb)
-
-                    const el_right = document.createElement("div")
-                    el_label.appendChild(el_right)
-
-                    const el_name = document.createElement("div")
-                    el_name.classList.add("opt__name")
-                    el_name.textContent = opt.name
-                    el_right.appendChild(el_name)
-
-                    if (opt.doc) {
-                        const el_doc = document.createElement("div")
-                        el_doc.classList.add("opt__doc")
-                        el_doc.textContent = opt.doc
-                        el_right.appendChild(el_doc)
-                    }
-
+                    break
+                case "flag":
+                    let el_cb
+                    frag.appendChild(makeElement("label", { for: `val_${opt.query}` }, [
+                        el_cb = frag.appendChild(makeElement("input", {
+                            id: `val_${opt.query}`,
+                            autocomplete: "off",
+                            type: "checkbox",
+                            name: `${opt.query}`,
+                            oninput() {
+                                updateSearch(params => {
+                                    if (el_cb.checked) {
+                                        params.set(opt.query, "1")
+                                    } else {
+                                        params.delete(opt.query)
+                                    }
+                                })
+                            }
+                        })),
+                        makeElement("div", null, [
+                            opt.doc && makeElement("div", { class: "opt__name" }, opt.name),
+                            opt.doc && makeElement("div", { class: "opt__doc" }, opt.doc),
+                        ]),
+                    ]))
                     onParamsUpdated(params => {
                         el_cb.checked = params.has(opt.query)
                     })
-
-                    el_cb.addEventListener("input", () => {
-                        updateSearch(params => {
-                            if (el_cb.checked) {
-                                params.set(opt.query, "1")
-                            } else {
-                                params.delete(opt.query)
-                            }
-                        })
-                    })
-
-                    continue
+                    break
+                default:
+                    throw new TypeError(`Invalid option type ${opt.type} for option ${opt.query}`)
                 }
-
-                throw new TypeError(`Invalid option type ${opt.type} for option ${opt.query}`)
+                el.appendChild(frag)
             }
 
             const calURL = ext => {
@@ -590,60 +586,41 @@
                     right: "listWeek,timeGridWeek",
                 },
                 eventContent(arg, createElement) {
-                    const domNodes = []
-
-                    if (arg.event.title) {
-                        const el = document.createElement("b")
-                        el.textContent = arg.event.title
-                        domNodes.push(el)
+                    return {
+                        domNodes: [
+                            makeElement(null, null, [
+                                arg.event.title && makeElement("b", null, arg.event.title),
+                                arg.event.extendedProps?.location?.length && arg.view.type === "timeGridWeek" && makeElement("br"),
+                                arg.event.extendedProps?.location?.length && arg.view.type !== "timeGridWeek" && makeElement("span", null, " \u00b7 "),
+                                arg.event.extendedProps?.location?.length && makeElement("span", null, arg.event.extendedProps.location),
+                                arg.event.extendedProps?.description?.length && arg.view.type === "timeGridWeek" && makeElement("br"),
+                                arg.event.extendedProps?.description?.length && arg.view.type !== "timeGridWeek" && makeElement("span", null, " \u00b7 "),
+                                arg.event.extendedProps?.description?.length && makeElement("span", {
+                                    style: {
+                                        whiteSpace: "pre-wrap",
+                                    },
+                                }, arg.event.extendedProps.description),
+                                arg.event.extendedProps?.isRecurrence && arg.view.type === "timeGridWeek" && makeElement(
+                                    document.createElementNS("http://www.w3.org/2000/svg", "svg"), {
+                                        viewBox: "0 0 24 24",
+                                        width: "14",
+                                        height: "14",
+                                        style: {
+                                            position: "absolute",
+                                            bottom: "1px",
+                                            right: "1px",
+                                        },
+                                    },
+                                    makeElement(document.createElementNS("http://www.w3.org/2000/svg", "path"), {
+                                        fill: "currentColor",
+                                        d: arg.event.extendedProps.isException // icon from fluenticons.co
+                                            ? "m3.613 2.21.094.083 18 18a1 1 0 0 1-1.32 1.497l-.094-.083-3.068-3.068c-.599.2-1.234.322-1.893.353l-.331.008H9.405l1.304 1.303.077.087A1 1 0 0 1 9.39 21.8l-.095-.083-3.005-3.005-.077-.087a1 1 0 0 1-.006-1.232l.083-.095 3.005-3.005.088-.078a1 1 0 0 1 1.232-.006l.095.084.077.087a1 1 0 0 1 .006 1.232l-.083.095-1.294 1.292h5.586c.187 0 .372-.01.553-.03L6.348 7.761A4.996 4.996 0 0 0 4 12.001c0 .918.248 1.779.68 2.519l.135.218a1 1 0 0 1-1.627 1.164A6.952 6.952 0 0 1 2 12a6.99 6.99 0 0 1 2.908-5.679L2.293 3.707a1 1 0 0 1 1.32-1.498ZM20 7.681c.32 0 .603.15.787.382l.053.075.017.027A6.963 6.963 0 0 1 22 12.001c0 1.977-.82 3.762-2.138 5.035l-1.415-1.414A4.985 4.985 0 0 0 20 12.001c0-.926-.252-1.793-.69-2.537l-.138-.22A1 1 0 0 1 20 7.683Zm-5.375-5.47.087.077 3.006 3.005a1 1 0 0 1 .077 1.327l-.078.087-3.005 3.006a1 1 0 0 1-1.492-1.327l.078-.088 1.297-1.298H9.826L7.911 5.085c.278-.043.56-.07.848-.08l.24-.004h5.598l-1.299-1.298a1 1 0 0 1-.078-1.327l.078-.087a1 1 0 0 1 1.327-.078Z"
+                                            : "m14.712 2.289-.087-.078a1 1 0 0 0-1.327.078l-.078.087a.999.999 0 0 0 .078 1.326l1.299 1.297H8.999l-.24.004A6.997 6.997 0 0 0 2 11.993c0 1.445.438 2.788 1.189 3.899a.999.999 0 0 0 1.626-1.163l-.135-.218A4.997 4.997 0 0 1 9 6.998h5.595l-1.297 1.297-.078.087a.999.999 0 0 0 1.492 1.326l3.006-3.003.077-.087a.999.999 0 0 0-.078-1.326l-3.005-3.003Zm6.075 5.771A.999.999 0 0 0 19 8.677c0 .209.064.402.172.561a4.997 4.997 0 0 1-4.17 7.75H9.414l1.294-1.29.083-.096a1 1 0 0 0-.006-1.23l-.077-.088-.095-.084a1.001 1.001 0 0 0-1.232.006l-.088.078-3.005 3.003-.083.095a1 1 0 0 0 .006 1.231l.077.087 3.005 3.003.095.084a1 1 0 0 0 1.397-1.41l-.077-.087-1.304-1.303h5.596l.24-.003a6.997 6.997 0 0 0 5.546-10.927v.003Z",
+                                    }),
+                                ),
+                            ]),
+                        ],
                     }
-                    if (arg.event.extendedProps.location) {
-                        if (arg.view.type == "timeGridWeek") {
-                            domNodes.push(document.createElement("br"))
-                        } else {
-                            const el = document.createElement("span")
-                            el.textContent = " \u00b7 "
-                            domNodes.push(el)
-                        }
-                        const el = document.createElement("span")
-                        el.textContent = arg.event.extendedProps.location
-                        domNodes.push(el)
-                    }
-                    if (arg.event.extendedProps.description) {
-                        if (arg.view.type == "timeGridWeek") {
-                            domNodes.push(document.createElement("br"))
-                        } else {
-                            const el = document.createElement("span")
-                            el.textContent = " \u00b7 "
-                            domNodes.push(el)
-                        }
-                        const el = document.createElement("i")
-                        el.style.whiteSpace = "pre-wrap"
-                        el.textContent = arg.event.extendedProps.description
-                        domNodes.push(el)
-                    }
-                    if (arg.view.type == "timeGridWeek") {
-                        if (arg.event.extendedProps.isRecurrence) {
-                            // icon from fluenticons.co
-                            const ic = document.createElementNS("http://www.w3.org/2000/svg", "svg")
-                            const icG = ic.appendChild(document.createElementNS(ic.namespaceURI, "path"))
-                            if (arg.event.extendedProps.isException) {
-                                icG.setAttribute("d", "m3.613 2.21.094.083 18 18a1 1 0 0 1-1.32 1.497l-.094-.083-3.068-3.068c-.599.2-1.234.322-1.893.353l-.331.008H9.405l1.304 1.303.077.087A1 1 0 0 1 9.39 21.8l-.095-.083-3.005-3.005-.077-.087a1 1 0 0 1-.006-1.232l.083-.095 3.005-3.005.088-.078a1 1 0 0 1 1.232-.006l.095.084.077.087a1 1 0 0 1 .006 1.232l-.083.095-1.294 1.292h5.586c.187 0 .372-.01.553-.03L6.348 7.761A4.996 4.996 0 0 0 4 12.001c0 .918.248 1.779.68 2.519l.135.218a1 1 0 0 1-1.627 1.164A6.952 6.952 0 0 1 2 12a6.99 6.99 0 0 1 2.908-5.679L2.293 3.707a1 1 0 0 1 1.32-1.498ZM20 7.681c.32 0 .603.15.787.382l.053.075.017.027A6.963 6.963 0 0 1 22 12.001c0 1.977-.82 3.762-2.138 5.035l-1.415-1.414A4.985 4.985 0 0 0 20 12.001c0-.926-.252-1.793-.69-2.537l-.138-.22A1 1 0 0 1 20 7.683Zm-5.375-5.47.087.077 3.006 3.005a1 1 0 0 1 .077 1.327l-.078.087-3.005 3.006a1 1 0 0 1-1.492-1.327l.078-.088 1.297-1.298H9.826L7.911 5.085c.278-.043.56-.07.848-.08l.24-.004h5.598l-1.299-1.298a1 1 0 0 1-.078-1.327l.078-.087a1 1 0 0 1 1.327-.078Z")
-                            } else {
-                                icG.setAttribute("d", "m14.712 2.289-.087-.078a1 1 0 0 0-1.327.078l-.078.087a.999.999 0 0 0 .078 1.326l1.299 1.297H8.999l-.24.004A6.997 6.997 0 0 0 2 11.993c0 1.445.438 2.788 1.189 3.899a.999.999 0 0 0 1.626-1.163l-.135-.218A4.997 4.997 0 0 1 9 6.998h5.595l-1.297 1.297-.078.087a.999.999 0 0 0 1.492 1.326l3.006-3.003.077-.087a.999.999 0 0 0-.078-1.326l-3.005-3.003Zm6.075 5.771A.999.999 0 0 0 19 8.677c0 .209.064.402.172.561a4.997 4.997 0 0 1-4.17 7.75H9.414l1.294-1.29.083-.096a1 1 0 0 0-.006-1.23l-.077-.088-.095-.084a1.001 1.001 0 0 0-1.232.006l-.088.078-3.005 3.003-.083.095a1 1 0 0 0 .006 1.231l.077.087 3.005 3.003.095.084a1 1 0 0 0 1.397-1.41l-.077-.087-1.304-1.303h5.596l.24-.003a6.997 6.997 0 0 0 5.546-10.927v.003Z")
-                            }
-                            icG.setAttribute("fill", "currentColor")
-                            ic.setAttribute("viewBox", "0 0 24 24")
-                            ic.setAttribute("width", "14")
-                            ic.setAttribute("height", "14")
-                            ic.style.position = "absolute"
-                            ic.style.bottom = "1px"
-                            ic.style.right = "1px"
-                            domNodes.push(ic)
-                        }
-                    }
-                    window.arg = arg
-                    return { domNodes }
                 },
             })
             calendar.render()

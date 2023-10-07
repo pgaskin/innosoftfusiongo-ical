@@ -112,6 +112,100 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 		return nil
 	}
 
+	// Queen's University (school110) frequently does this silly thing where
+	// they don't actually use the cancellation feature of Innosoft Fusion, and
+	// they instead remove the entire instance, and add an entirely new activity
+	// with a single instance which is the same except it has " - CANCELLED" or
+	// " - CANCELED" appended to it... smh...
+	{
+		var (
+			stupidCancelled             []int
+			cancelledActivities         []int
+			syntheticActivities         []fusiongo.ActivityInstance
+			syntheticActivityCategories []fusiongo.ActivityCategory
+		)
+		for i, fa := range schedule.Activities {
+
+			// check if it's a fake-cancelled event
+			name, cancelled := strings.CutSuffix(fa.Activity, " - CANCELLED")
+			if !cancelled {
+				name, cancelled = strings.CutSuffix(fa.Activity, " - CANCELED")
+			}
+			if !cancelled {
+				continue
+			}
+
+			// find matching activities
+			fn := func(exact bool) (m []int) {
+				for i1, fa1 := range schedule.Activities {
+					if fa1.Activity != name {
+						continue // activity should be the same, but without the cancelled part
+					}
+					if fa1.ActivityID == fa.ActivityID {
+						continue // activityID should be different
+					}
+					if fa1.Description != "" && fa1.Description != fa.Description {
+						continue // description should be empty or identical
+					}
+					if fa1.Location != fa.Location {
+						continue // location should be the same
+					}
+					if fa1.Time.TimeRange.Start != fa.Time.TimeRange.Start {
+						continue // start should be the same (end time doesn't matter; it could be an exception that was cancelled, plus we group by start time -- see below)
+					}
+					if exact {
+						if fa1.Time.TimeRange.End != fa.Time.TimeRange.End {
+							continue // end time should be the same
+						}
+						if fa1.Time.Date != fa.Time.Date {
+							continue // date should be the same
+						}
+					}
+					m = append(m, i1)
+				}
+				return
+			}
+
+			// if we have an exact match, set it to cancelled and drop the fake cancellation
+			if m := fn(true); len(m) == 1 {
+				stupidCancelled = append(stupidCancelled, i)
+				cancelledActivities = append(cancelledActivities, m[0])
+				continue
+			}
+
+			// if not, but we have a match for the recurrence group, add an instance and drop the fake cancellation
+			if m := fn(false); len(m) >= 1 {
+				stupidCancelled = append(stupidCancelled, i)
+				syntheticActivities = append(syntheticActivities, schedule.Activities[m[0]])
+				syntheticActivities[len(syntheticActivities)-1].Time = fa.Time
+				syntheticActivities[len(syntheticActivities)-1].IsCancelled = true
+				syntheticActivityCategories = append(syntheticActivityCategories, schedule.Categories[m[0]])
+				continue
+			}
+		}
+
+		// if we have things to process, clone the schedule and do stuff
+		if len(stupidCancelled) != 0 {
+			schedule = cloneSchedule(schedule)
+
+			// set cancellations
+			for _, x := range cancelledActivities {
+				schedule.Activities[x].IsCancelled = true
+			}
+
+			// delete the processed fake cancellations in reverse order
+			for i := len(stupidCancelled) - 1; i >= 0; i-- {
+				x := stupidCancelled[i]
+				schedule.Activities = slices.Delete(schedule.Activities, x, x+1)
+				schedule.Categories = slices.Delete(schedule.Categories, x, x+1)
+			}
+
+			// add the new synthetic instances
+			schedule.Activities = append(schedule.Activities, syntheticActivities...)
+			schedule.Categories = append(schedule.Categories, syntheticActivityCategories...)
+		}
+	}
+
 	// check some basic assumptions
 	// - we depend (for correctness, not code) on the fact that an activity is uniquely identified by its id and location and can only occur once per start time per day
 	// - we also depend on each activity having at least one category (this should always be true)
@@ -829,6 +923,26 @@ func (c *Calendar) describeRecurrence(ak activityKey, schFilter map[activityKey]
 		})
 	}
 	return excDesc.String()
+}
+
+func cloneSchedule(s *fusiongo.Schedule) *fusiongo.Schedule {
+	ns := &fusiongo.Schedule{
+		Updated:    s.Updated,
+		Activities: make([]fusiongo.ActivityInstance, len(s.Activities)),
+		Categories: make([]fusiongo.ActivityCategory, len(s.Activities)),
+	}
+	for i := range s.Activities {
+		ns.Activities[i] = s.Activities[i]
+		ns.Categories[i] = fusiongo.ActivityCategory{
+			Category:   make([]string, len(s.Categories[i].Category)),
+			CategoryID: make([]string, len(s.Categories[i].CategoryID)),
+		}
+		for j := range s.Categories[i].Category {
+			ns.Categories[i].Category[j] = s.Categories[i].Category[j]
+			ns.Categories[i].CategoryID[j] = s.Categories[i].CategoryID[j]
+		}
+	}
+	return ns
 }
 
 // cmpMulti combines multiple compare results for use in a sort function by

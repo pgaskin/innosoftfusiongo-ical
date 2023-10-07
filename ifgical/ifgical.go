@@ -783,7 +783,7 @@ func (c *Calendar) describeRecurrence(ak activityKey, schFilter map[activityKey]
 				if i == -1 {
 					diff = "not"
 					hasDiff = true
-				} else if !schFilter[ak][i] {
+				} else if !schFilter[ak][i] && !ar.Instances[i].IsCancelled { // still say cancelled even if DeleteCancelled is enabled
 					diff = "does not match filter"
 					hasDiff = true
 				} else {

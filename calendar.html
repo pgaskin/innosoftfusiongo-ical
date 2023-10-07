@@ -589,7 +589,11 @@
                     return {
                         domNodes: [
                             makeElement(null, null, [
-                                arg.event.title && makeElement("b", null, arg.event.title),
+                                arg.event.title && makeElement("b", {
+                                    style: {
+                                        textDecoration: arg.event.title.startsWith("CANCELLED - ") ? "line-through" : "none",
+                                    },
+                                }, arg.event.title),
                                 arg.event.extendedProps?.location?.length && arg.view.type === "timeGridWeek" && makeElement("br"),
                                 arg.event.extendedProps?.location?.length && arg.view.type !== "timeGridWeek" && makeElement("span", null, " \u00b7 "),
                                 arg.event.extendedProps?.location?.length && makeElement("span", null, arg.event.extendedProps.location),

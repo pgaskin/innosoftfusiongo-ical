@@ -382,65 +382,147 @@
                 return element
             }
 
+            class ParamOptions {
+                #cb
+                #vs
+                constructor() {
+                    this.#cb = []
+                }
+                parse(search) {
+                    this.#vs = []
+                    if (search.length) {
+                        if (search.charAt(0) == "?") {
+                            search = search.substring(1)
+                        }
+                        while (1) {
+                            const i = search.indexOf("&")
+                            let k = search
+                            if (i != -1) {
+                                k = k.substring(0, i)
+                            }
+                            let v
+                            const j = k.indexOf("=")
+                            if (j != -1) {
+                                v = k.substring(j+1)
+                                k = k.substring(0, j)
+                            }
+                            this.#vs.push(decodeURIComponent(k.replace(/\+/g, "%20")))
+                            this.#vs.push(v ? decodeURIComponent(v.replace(/\+/g, "%20")) : undefined)
+                            if (i == -1) {
+                                break
+                            }
+                            search = search.substring(i+1)
+                        }
+                    }
+                    this.#notify()
+                }
+                watch(cb, param = undefined) {
+                    if (cb) {
+                        this.#cb.push(param, cb)
+                    }
+                }
+                getBool(key) {
+                    let vi = -1
+                    for (let i = 0; i < this.#vs.length; i += 2) {
+                        if (this.#vs[i] == key) {
+                            vi = i+1
+                        }
+                    }
+                    if (vi === -1) {
+                        return false
+                    }
+                    return [undefined, "1", "t", "T", "true", "TRUE", "True"].includes(this.#vs[vi])
+                }
+                get(key) {
+                    const r = []
+                    for (let i = 0; i < this.#vs.length; i += 2) {
+                        if (this.#vs[i] == key) {
+                            r.push(this.#vs[i+1])
+                        }
+                    }
+                    return r
+                }
+                set(key, ...value) {
+                    if (!value.length) {
+                        value.push(undefined)
+                    }
+                    for (let i = 0; i < this.#vs.length;) {
+                        if (this.#vs[i] == key) {
+                            if (!value.length) {
+                                this.#vs.splice(i, 2)
+                                continue
+                            }
+                            this.#vs[i+1] = value.shift()
+                        }
+                        i += 2
+                    }
+                    for (const v of value) {
+                        this.#vs.push(key, v)
+                    }
+                    this.#notify(key)
+                }
+                has(key, value = undefined) {
+                    for (let i = 0; i < this.#vs.length; i += 2) {
+                        if (this.#vs[i] == key && value == this.#vs[i+1]) {
+                            return true
+                        }
+                    }
+                    return false
+                }
+                add(key, value = undefined) {
+                    this.#vs.push(key, value)
+                    this.#notify(key)
+                }
+                remove(key, ...value) {
+                    for (let i = 0; i < this.#vs.length;) {
+                        if (this.#vs[i] == key && !value.length || value.includes(this.#vs[i+1])) {
+                            this.#vs.splice(i, 2)
+                            continue
+                        }
+                        i += 2
+                    }
+                    this.#notify(key)
+                }
+                toString() {
+                    let r = ""
+                    for (let i = 0; i < this.#vs.length; i += 2) {
+                        if (r.length) {
+                            r += "&"
+                        }
+                        r += encodeURIComponent(this.#vs[i]).replace(/\+/g, "%2B").replace(/%20/g, "+")
+                        if (this.#vs[i+1] !== undefined) {
+                            r += "="
+                            r += encodeURIComponent(this.#vs[i+1]).replace(/\+/g, "%2B").replace(/%20/g, "+")
+                        }
+                    }
+                    return r
+                }
+                #notify(key = undefined) {
+                    for (let i = 0; i < this.#cb.length; i += 2) {
+                        if (key === undefined || this.#cb[i] === undefined || this.#cb[i] == key) {
+                            this.#cb[i+1]()
+                        }
+                    }
+                }
+            }
+
             const app = document.getElementById("app")
-
+            
             // query string handling
+            const qpo = new ParamOptions()
             const query = app.querySelector("nav.toolbar > input.query")
-            const paramsUpdated = []
-            const onParamsUpdated = fn => {
-                if (fn) {
-                    paramsUpdated.push(fn)
-                }
-                fn(new URL(window.location).searchParams)
-            }
-            const urlSearchParamsDeleteKV = (p, key, value) => {
-                // since only firefox currently supports URLSearchParams.delete(k, v)
-                const ks = []
-                const es = []
-                for (const [k, v] of p.entries()) {
-                    if (k === undefined || v === undefined) continue
-                    ks.push(k)
-                    if (k === key && v === value) continue
-                    es.push([k, v])
-                }
-                for (const k of ks) {
-                    p.delete(k)
-                }
-                for (const [k, v] of es) {
-                    p.append(k, v)
-                }
-            }
-            const updateSearch = (search = undefined) => {
-                const url = new URL(window.location)
-                if (search !== undefined) {
-                    if (typeof search == "string" || search instanceof String) {
-                        if (!search.startsWith("?")) {
-                            search = "?" + search
-                        }
-                        if (search == "?") {
-                            search = ""
-                        }
-                        url.search = search
-                    } else {
-                        search(url.searchParams)
-                    }
-                    window.history.replaceState(null, document.title, url)
-                    query.value = decodeURIComponent(url.search.substring(1))
-
-                    for (const fn of paramsUpdated) {
-                        fn(url.searchParams)
-                    }
-                }
-                return url.searchParams
-            }
-            query.value = decodeURIComponent(window.location.search.substring(1))
+            qpo.watch(() => {
+                const u = new URL(window.location.href)
+                query.value = u.search = qpo.toString()
+                window.history.replaceState(null, "", u)
+            })
 
             let debounce
             query.addEventListener("input", () => {
                 if (debounce !== undefined) {
                     window.clearTimeout(debounce)
                 }
-                debounce = window.setTimeout(() => updateSearch(query.value), 150)
+                debounce = window.setTimeout(() => qpo.parse(query.value), 150)
             })
 
             // options
@@ -461,7 +543,7 @@
                     frag.appendChild(makeElement("div", { class: "opt__name" }, `${opt.name}`))
                     opt.doc && frag.appendChild(makeElement("div", { class: "opt__doc" }, `${opt.doc}`))
                     el_items = frag.appendChild(makeElement("div", { class: "opt_items" }))
-                    onParamsUpdated(params => {
+                    qpo.watch(() => {
                         const frag = document.createDocumentFragment()
                         frag.appendChild(makeElement("div", { class: "opt__item opt__item--new" }, [
                             el_item_input = makeElement("input", {
@@ -470,13 +552,13 @@
                                 placeholder: opt.example ? `${opt.example}` : undefined,
                                 onkeydown(ev) {
                                     if (ev.keyCode == 13) {
-                                        updateSearch(params => {
-                                            const flt = el_item_input.value.trim()
-                                            if (!params.getAll(opt.query).includes(flt)) {
-                                                params.append(opt.query, flt)
+                                        let flt = el_item_input.value.trim()
+                                        if (flt.length) {
+                                            if (!qpo.has(opt.query, flt)) {
+                                                qpo.add(opt.query, flt)
                                             }
                                             el_item_input.value = ""
-                                        })
+                                        }
                                     }
                                 },
                             }),
@@ -484,29 +566,30 @@
                                 class: "primary",
                                 title: "Include",
                                 onclick() {
-                                    updateSearch(params => {
-                                        const flt = el_item_input.value.trim().replace(/^-/, "")
-                                        if (!params.getAll(opt.query).includes(flt)) {
-                                            params.append(opt.query, flt)
+                                    let flt = el_item_input.value.trim().replace(/^-/, "")
+                                    if (flt.length) {
+                                        if (!qpo.has(opt.query, flt)) {
+                                            qpo.add(opt.query, flt)
                                         }
                                         el_item_input.value = ""
-                                    })
+                                    }
                                 },
                             }, "+"),
                             makeElement("button", {
                                 title: "Exclude",
                                 onclick() {
-                                    updateSearch(params => {
-                                        const flt = "-" + el_item_input.value.trim().replace(/^-/, "")
-                                        if (!params.getAll(opt.query).includes(flt)) {
-                                            params.append(opt.query, flt)
+                                    let flt = el_item_input.value.trim().replace(/^-/, "")
+                                    if (flt.length) {
+                                        flt = "-" + flt
+                                        if (!qpo.has(opt.query, flt)) {
+                                            qpo.add(opt.query, flt)
                                         }
                                         el_item_input.value = ""
-                                    })
+                                    }
                                 },
                             }, "-"),
                         ]))
-                        for (const item of params.getAll(opt.query)) {
+                        for (const item of qpo.get(opt.query)) {
                             frag.appendChild(makeElement("div", { class: "opt__item" }, [
                                 makeElement("input", {
                                     value: item,
@@ -517,15 +600,13 @@
                                 makeElement("button", {
                                     class: "delete",
                                     onclick() {
-                                        updateSearch(params => {
-                                            urlSearchParamsDeleteKV(params, opt.query, item)
-                                        })
+                                        qpo.remove(opt.query, item)
                                     },
                                 }, "x")
                             ]))
                         }
                         el_items.replaceChildren(frag)
-                    })
+                    }, opt.query)
                     break
                 case "flag":
                     let el_cb
@@ -536,13 +617,11 @@
                             type: "checkbox",
                             name: `${opt.query}`,
                             oninput() {
-                                updateSearch(params => {
-                                    if (el_cb.checked) {
-                                        params.set(opt.query, "1")
-                                    } else {
-                                        params.delete(opt.query)
-                                    }
-                                })
+                                if (el_cb.checked) {
+                                    qpo.set(opt.query)
+                                } else {
+                                    qpo.remove(opt.query)
+                                }
                             }
                         })),
                         makeElement("div", null, [
@@ -550,9 +629,9 @@
                             opt.doc && makeElement("div", { class: "opt__doc" }, opt.doc),
                         ]),
                     ]))
-                    onParamsUpdated(params => {
-                        el_cb.checked = params.has(opt.query)
-                    })
+                    qpo.watch(() => {
+                        el_cb.checked = qpo.getBool(opt.query)
+                    }, opt.query)
                     break
                 default:
                     throw new TypeError(`Invalid option type ${opt.type} for option ${opt.query}`)
@@ -647,7 +726,7 @@
             const errorEl = document.querySelector("#app > main > section.error")
 
             let controller
-            const reload = () => {
+            qpo.watch(() => {
                 if (controller !== undefined) {
                     controller.abort()
                 }
@@ -670,9 +749,9 @@
                         }
                     },
                 )
-            }
+            })
 
-            onParamsUpdated(params => reload())
+            qpo.parse(window.location.search)
         } catch (ex) {
             const errorEl = document.querySelector("#app > main > section.error")
             errorEl.hidden = false

@@ -821,6 +821,9 @@ func (c *Calendar) RenderFullCalendarJSON(o Options) []byte {
 						b = jsonStr(jsonKey(b, "location"), ak.Location)          // same as icalendar plugin
 						b = jsonBool(jsonKey(b, "isRecurrence"), ar.Recur())      // custom
 						b = jsonBool(jsonKey(b, "isException"), ex)               // custom
+						if !o.FakeCancelled && ai.IsCancelled {
+							b = jsonBool(jsonKey(b, "isCancelled"), ai.IsCancelled) // custom
+						}
 						b = jsonObject(b, '}')
 						b = jsonObject(b, '}')
 					}

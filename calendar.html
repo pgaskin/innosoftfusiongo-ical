@@ -591,7 +591,7 @@
                             makeElement(null, null, [
                                 arg.event.title && makeElement("b", {
                                     style: {
-                                        textDecoration: arg.event.title.startsWith("CANCELLED - ") ? "line-through" : "none",
+                                        textDecoration: arg.event.extendedProps.isCancelled ? "line-through" : "none",
                                     },
                                 }, arg.event.title),
                                 arg.event.extendedProps?.location?.length && arg.view.type === "timeGridWeek" && makeElement("br"),

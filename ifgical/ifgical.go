@@ -465,23 +465,21 @@ func (c *Calendar) RenderICS(o Options) []byte {
 
 		// write events
 		writeEvent := func(ai activityInstance, base bool) {
+			if ai.IsCancelled {
+				ai.Activity = "CANCELLED - " + ai.Activity
+			}
+
 			// write event info
 			b = icalAppendPropRaw(b, "BEGIN", "VEVENT")
 			b = icalAppendPropRaw(b, "UID", uid)
 			b = icalAppendPropDateTimeUTC(b, "DTSTAMP", fusiongo.GoDateTime(c.schT.UTC())) // this should be when the event was created, but unfortunately, we can't determine that deterministically, so just use the schedule update time
+			b = icalAppendPropText(b, "SUMMARY", ai.Activity)
 
 			// write event status information if it's the only event or a recurrence exception
 			if !ar.Recur() || !base {
-				if !ai.IsCancelled {
-					b = icalAppendPropText(b, "SUMMARY", ai.Activity)
-				} else {
-					b = icalAppendPropText(b, "SUMMARY", "CANCELLED - "+ai.Activity)
-					if !o.FakeCancelled {
-						b = icalAppendPropRaw(b, "STATUS", "CANCELLED")
-					}
+				if !o.FakeCancelled {
+					b = icalAppendPropRaw(b, "STATUS", "CANCELLED")
 				}
-			} else {
-				b = icalAppendPropText(b, "SUMMARY", ai.Activity)
 			}
 
 			// write more event info
@@ -616,11 +614,11 @@ func (c *Calendar) RenderJSON(o Options) []byte {
 				if i != -2 && ai.IsCancelled != ar.Base.IsCancelled { // only if not the base instance
 					b = jsonBool(jsonKey(b, "isCancelled"), ai.IsCancelled)
 				}
+				if ai.IsCancelled {
+					ai.Description = "CANCELLED - " + ai.Activity
+				}
 				if i == -2 || ai.Activity != ar.Base.Activity {
 					b = jsonStr(jsonKey(b, "activity"), ai.Activity)
-				}
-				if o.FakeCancelled && ai.IsCancelled {
-					ai.Description = "CANCELLED - " + ai.Description
 				}
 				if i == -2 || ai.Description != ar.Base.Description {
 					b = jsonStr(jsonKey(b, "description"), ai.Description)
@@ -715,6 +713,9 @@ func (c *Calendar) RenderFullCalendarJSON(o Options) []byte {
 			ar.Iter(func(_ fusiongo.Date, ex bool, i int) {
 				if i != -1 && schFilter[ak][i] {
 					ai := ar.Instances[i]
+					if ai.IsCancelled {
+						ai.Activity = "CANCELLED - " + ai.Activity
+					}
 					if !ai.IsCancelled || !o.DeleteCancelled {
 						b = jsonObject(b, '{')
 						b = jsonStr(jsonKey(b, "title"), ai.Activity)

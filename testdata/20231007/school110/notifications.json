@@ -1,0 +1,15 @@
+{
+    "lastUpdateUtcDateTime": "2023-10-07T17:06:15Z",
+    "notifications": [
+        {
+            "id": "18962",
+            "notification": "FITNESS CLASS NOTICE: Please be aware that our Bootcamp class on Saturday October 7 at 10:30 AM is canceled.",
+            "datetime_sent": "2023-10-05 09:39:00"
+        },
+        {
+            "id": "18956",
+            "notification": "POOL NOTICE: Please be aware that all member and women's only lane swims on Monday, October 9 are canceled for Thanksgiving.",
+            "datetime_sent": "2023-10-04 22:59:00"
+        }
+    ]
+}

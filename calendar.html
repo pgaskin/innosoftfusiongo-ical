@@ -662,7 +662,14 @@
                 headerToolbar: {
                     left: "prev,next",
                     center: "title",
-                    right: "listWeek,timeGridWeek",
+                    right: "listWeek,timeGridWeek,timeGridThreeDay",
+                },
+                views: {
+                    timeGridThreeDay: {
+                        type: "timeGridWeek",
+                        duration: { days: 3 },
+                        buttonText: "3-day",
+                    },
                 },
                 eventContent(arg, createElement) {
                     return {
@@ -673,17 +680,17 @@
                                         textDecoration: arg.event.extendedProps.isCancelled ? "line-through" : "none",
                                     },
                                 }, arg.event.title),
-                                arg.event.extendedProps?.location?.length && arg.view.type === "timeGridWeek" && makeElement("br"),
-                                arg.event.extendedProps?.location?.length && arg.view.type !== "timeGridWeek" && makeElement("span", null, " \u00b7 "),
+                                arg.event.extendedProps?.location?.length && arg.view.type !== "listWeek" && makeElement("br"),
+                                arg.event.extendedProps?.location?.length && arg.view.type === "listWeek" && makeElement("span", null, " \u00b7 "),
                                 arg.event.extendedProps?.location?.length && makeElement("span", null, arg.event.extendedProps.location),
-                                arg.event.extendedProps?.description?.length && arg.view.type === "timeGridWeek" && makeElement("br"),
-                                arg.event.extendedProps?.description?.length && arg.view.type !== "timeGridWeek" && makeElement("span", null, " \u00b7 "),
+                                arg.event.extendedProps?.description?.length && arg.view.type !== "listWeek" && makeElement("br"),
+                                arg.event.extendedProps?.description?.length && arg.view.type === "listWeek" && makeElement("span", null, " \u00b7 "),
                                 arg.event.extendedProps?.description?.length && makeElement("span", {
                                     style: {
                                         whiteSpace: "pre-wrap",
                                     },
                                 }, arg.event.extendedProps.description),
-                                arg.event.extendedProps?.isRecurrence && arg.view.type === "timeGridWeek" && makeElement(
+                                arg.event.extendedProps?.isRecurrence && arg.view.type !== "listWeek" && makeElement(
                                     document.createElementNS("http://www.w3.org/2000/svg", "svg"), {
                                         viewBox: "0 0 24 24",
                                         width: "14",

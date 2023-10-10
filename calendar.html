@@ -656,13 +656,15 @@
                 prompt("Subscribe to the following link in your calendar application.", calURL("ics"))
             })
 
+            const viewTypes = ["listWeek", "timeGridWeek", "timeGridThreeDay"]
+            const viewKeys = ["list", "week", "3day"]
             const calendar = new FullCalendar.Calendar(app.querySelector("main > section.calendar"), {
-                initialView: "listWeek",
+                initialView: viewTypes[Math.max(0, viewKeys.indexOf(new URLSearchParams(window.location.hash.substring(1)).get("view")))],
                 height: "100%",
                 headerToolbar: {
                     left: "prev,next",
                     center: "title",
-                    right: "listWeek,timeGridWeek,timeGridThreeDay",
+                    right: viewTypes.join(","),
                 },
                 views: {
                     timeGridThreeDay: {
@@ -670,6 +672,13 @@
                         duration: { days: 3 },
                         buttonText: "3-day",
                     },
+                },
+                viewClassNames(arg) {
+                    const url = new URL(window.location.href)
+                    const p = new URLSearchParams(url.hash.substring(1))
+                    p.set("view", viewKeys[viewTypes.indexOf(arg.view.type)])
+                    url.hash = p.toString()
+                    window.history.replaceState(null, "", url)
                 },
                 eventContent(arg, createElement) {
                     return {
@@ -712,6 +721,12 @@
                         ],
                     }
                 },
+            })
+            window.addEventListener("hashchange", ev => {
+                const i = viewKeys.indexOf(new URLSearchParams(window.location.hash.substring(1)).get("view"))
+                if (i != -1) {
+                    calendar.changeView(viewTypes[i])
+                }
             })
             calendar.render()
 

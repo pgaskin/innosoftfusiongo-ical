@@ -552,9 +552,11 @@ func (c *Calendar) RenderICS(o Options) []byte {
 		)
 
 		// describe recurrence information if enabled
-		excDesc := c.describeRecurrence(ak, schFilter)
-		if excDesc != "" {
-			excDesc = "\n\n" + excDesc
+		var excDesc string
+		if o.DescribeRecurrence {
+			if v := c.describeRecurrence(ak, schFilter); v != "" {
+				excDesc = "\n\n" + v
+			}
 		}
 
 		// write events

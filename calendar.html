@@ -806,10 +806,13 @@
                 const u = new URL(calURL("ics"))
                 const u_http = u.toString()
                 const u_http_enc = encodeURIComponent(u_http).replace(/\+/g, "%2B").replace(/%20/g, "+")
+                u.protocol = "http"
+                const u_httpi = u.toString()
+                const u_httpi_enc = encodeURIComponent(u_httpi).replace(/\+/g, "%2B").replace(/%20/g, "+")
                 u.protocol = "webcal"
                 const u_webcal = u.toString()
                 sub_fallback.value = u_http
-                sub_google.href = `https://calendar.google.com/calendar/u/0/r?cid=${u_http_enc}&pli=1`
+                sub_google.href = `https://calendar.google.com/calendar/u/0/r?cid=${u_httpi_enc}&pli=1`
                 sub_apple.href = u_webcal
                 sub_outlook_work.href = `https://outlook.office.com/calendar/0/addfromweb?url=${u_http_enc}&name=Calendar&mkt=en-001`
                 sub_outlook_personal.href = `https://outlook.live.com/calendar/0/addfromweb?url=${u_http_enc}&name=Calendar&mkt=en-001`

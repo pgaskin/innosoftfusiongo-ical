@@ -33,6 +33,7 @@
             height: 100%;
             background: var(--app-panel-background);
             color: #000;
+            position: relative;
             --app-spacing: .5rem;
             --app-panel-border: #ccc;
             --app-panel-border-radius: 4px;
@@ -250,6 +251,109 @@
             box-shadow: none;
             outline: none;
         }
+        .app > div.subscribe {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.80);
+            backdrop-filter: blur(2px);
+            font-size: .825em;
+            z-index: 10000;
+        }
+        .app > div.subscribe > aside.inner {
+            flex: 1;
+            min-width: 0;
+            max-width: 400px;
+            min-height: 0;
+            max-height: 100%;
+            overflow: hidden auto;
+            padding: .25em;
+        }
+        .app > div.subscribe > aside.inner > header {
+            display: flex;
+            align-items: flex-end;
+            margin: .5em;
+            user-select: none;
+        }
+        .app > div.subscribe > aside.inner > header > .title {
+            flex: 1;
+            font-size: 1.3em;
+            font-weight: bold;
+        }
+        .app > div.subscribe > aside.inner > .sub {
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            background-color: var(--app-panel-background-lighter);
+            border: 1px solid var(--app-panel-border);
+            border-radius: var(--app-panel-border-radius);
+            margin: .5em;
+            padding: .5em;
+            gap: .25em;
+            user-select: none;
+            text-decoration: none;
+        }
+        .app > div.subscribe > aside.inner > a.sub {
+            background-color: var(--app-button-background);
+            color: var(--app-button-color);
+            border: 1px solid var(--app-control-border);
+        }
+        .app > div.subscribe > aside.inner > a.sub:hover {
+            background-color: var(--app-button-background-hover);
+        }
+        .app > div.subscribe > aside.inner > a.sub:active {
+            background-color: var(--app-button-background-active);
+        }
+        .app > div.subscribe > aside.inner > .sub > div.name {
+            font-weight: 600;
+            min-width: 0;
+        }
+        .app > div.subscribe > aside.inner > .sub > div.name > span {
+            opacity: 0.5;
+            min-width: 0;
+        }
+        .app > div.subscribe > aside.inner > .sub > div.desc {
+            font-size: .825em;
+        }
+        .app > div.subscribe > aside.inner > .sub > input {
+            background: rgba(128, 128, 128, 0.2);
+            border: none !important;
+            outline: 0 !important;
+        }
+        .app > div.subscribe > aside.inner > .sub {
+            background-repeat: no-repeat;
+            background-size: 32px 32px;
+            background-position: 4px 50%;
+        }
+        .app > div.subscribe > aside.inner > .sub.sub--apple {
+            padding-left: 40px;
+            background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMCAzMCI+PHBhdGggZD0iTTI1LjU2NSA5Ljc4NWMtLjEyMy4wNzctMy4wNTEgMS43MDItMy4wNTEgNS4zMDUuMTM4IDQuMTA5IDMuNjk1IDUuNTUgMy43NTYgNS41NS0uMDYxLjA3Ny0uNTM3IDEuOTYzLTEuOTQ3IDMuOTQtMS4xMTkgMS43MDMtMi4zNjEgMy40Mi00LjI0NyAzLjQyLTEuNzk0IDAtMi40MzgtMS4xMzUtNC41MDgtMS4xMzUtMi4yMjMgMC0yLjg1MiAxLjEzNS00LjU1NCAxLjEzNS0xLjg4NiAwLTMuMjItMS44MDktNC40LTMuNDk2LTEuNTMzLTIuMjA4LTIuODM2LTUuNjczLTIuODgyLTktLjAzMS0xLjc2My4zMDctMy40OTYgMS4xNjUtNC45NjggMS4yMTEtMi4wNTUgMy4zNzMtMy40NSA1LjczNC0zLjQ5NiAxLjgwOS0uMDYxIDMuNDE5IDEuMjQyIDQuNTIzIDEuMjQyIDEuMDU4IDAgMy4wMzYtMS4yNDIgNS4yNzQtMS4yNDIuOTY2LjAwMSAzLjU0Mi4yOTIgNS4xMzcgMi43NDV6TTE1LjAwMSA2LjY4OGMtLjMyMi0xLjYxLjU2Ny0zLjIyIDEuMzk1LTQuMjQ3IDEuMDU4LTEuMjQyIDIuNzI5LTIuMDg1IDQuMTctMi4wODUuMDkyIDEuNjEtLjQ5MSAzLjE4OS0xLjUzMyA0LjMzOS0uOTM1IDEuMjQyLTIuNTQ1IDIuMTc3LTQuMDMyIDEuOTkzeiIvPjwvc3ZnPg==);
+        }
+        .app > div.subscribe > aside.inner > .sub.sub--outlook-work {
+            padding-left: 40px;
+            background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+PGxpbmVhckdyYWRpZW50IGlkPSJhIiB4MT0iMzEuNjQ1IiB4Mj0iMzEuNjQ1IiB5MT0iNi44MzkiIHkyPSI0MC42MTUiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNlNjhlMDAiLz48c3RvcCBvZmZzZXQ9Ii4wMzYiIHN0b3AtY29sb3I9IiNlMzg0MDAiLz48c3RvcCBvZmZzZXQ9Ii4xNzEiIHN0b3AtY29sb3I9IiNkYjYyMDAiLz48c3RvcCBvZmZzZXQ9Ii4yOTkiIHN0b3AtY29sb3I9IiNkNDRhMDAiLz48c3RvcCBvZmZzZXQ9Ii40MTciIHN0b3AtY29sb3I9IiNkMDNiMDAiLz48c3RvcCBvZmZzZXQ9Ii41MTUiIHN0b3AtY29sb3I9IiNjZjM2MDAiLz48c3RvcCBvZmZzZXQ9Ii44NzgiIHN0b3AtY29sb3I9IiNkMjI5MDAiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNkNDI0MDAiLz48L2xpbmVhckdyYWRpZW50PjxwYXRoIGZpbGw9InVybCgjYSkiIGQ9Ik0zNS44ODMgNy4zNDFDMzcuNzI2IDcuODUgMzkgOS41MDggMzkgMTEuMzk3djI1LjE2MmMwIDEuOTA2LTEuMzAxIDMuNTctMy4xNjggNC4wNjVMMjQuMjkgNDMuODYzIDI4IDM2VjExbC0zLjE0OC02Ljg4NSAxMS4wMzEgMy4yMjZ6Ii8+PGxpbmVhckdyYWRpZW50IGlkPSJiIiB4MT0iMTMuOTIyIiB4Mj0iMjkuMDUxIiB5MT0iMzQuOTUxIiB5Mj0iNDEuMDczIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZjUyNTM3Ii8+PHN0b3Agb2Zmc2V0PSIuMjkzIiBzdG9wLWNvbG9yPSIjZjMyNTM2Ii8+PHN0b3Agb2Zmc2V0PSIuNDY1IiBzdG9wLWNvbG9yPSIjZWEyNDM0Ii8+PHN0b3Agb2Zmc2V0PSIuNjA1IiBzdG9wLWNvbG9yPSIjZGMyMjMxIi8+PHN0b3Agb2Zmc2V0PSIuNzI5IiBzdG9wLWNvbG9yPSIjYzgyMDJjIi8+PHN0b3Agb2Zmc2V0PSIuODQxIiBzdG9wLWNvbG9yPSIjYWUxZTI1Ii8+PHN0b3Agb2Zmc2V0PSIuOTQ0IiBzdG9wLWNvbG9yPSIjOGYxYTFkIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjN2ExODE4Ii8+PC9saW5lYXJHcmFkaWVudD48cGF0aCBmaWxsPSJ1cmwoI2IpIiBkPSJNMjggMzV2My45MjdjMCAzLjgwMy0zLjgyNCA2LjI0OS03LjAxOSA0LjQ5MWwtNi45MzYtNC40NDVjLS44MDItLjQ2Ni0xLjIzNi0xLjQ2Mi0uOTY0LTIuNDU3LjI1My0uOTI2IDEuMTIxLTEuNTE2IDIuMDM0LTEuNTE2SDI4eiIvPjxsaW5lYXJHcmFkaWVudCBpZD0iYyIgeDE9IjUuMzgyIiB4Mj0iMjUuODc0IiB5MT0iMzIuMjg5IiB5Mj0iMS43OCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI2Q5NmFiMSIvPjxzdG9wIG9mZnNldD0iLjEzNyIgc3RvcC1jb2xvcj0iI2Q5NTM4YiIvPjxzdG9wIG9mZnNldD0iLjQ5NSIgc3RvcC1jb2xvcj0iI2Q5MWEyYSIvPjxzdG9wIG9mZnNldD0iLjU3NSIgc3RvcC1jb2xvcj0iI2QzMWEyOSIvPjxzdG9wIG9mZnNldD0iLjY4IiBzdG9wLWNvbG9yPSIjYzIxOTI2Ii8+PHN0b3Agb2Zmc2V0PSIuOCIgc3RvcC1jb2xvcj0iI2E3MTgyMSIvPjxzdG9wIG9mZnNldD0iLjkyOSIgc3RvcC1jb2xvcj0iIzgxMTYxOSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzY5MTUxNSIvPjwvbGluZWFyR3JhZGllbnQ+PHBhdGggZmlsbD0idXJsKCNjKSIgZD0ibTIxLjk0NiA0LjUyNi0xMS45MjQgNi43ODZDOC43NzIgMTIuMDI0IDggMTMuMzUxIDggMTQuNzg5djE4LjQyOWMwIDEuMzU3IDEuNDU5IDIuMjE1IDIuNjQ1IDEuNTU0bDQuNDcyLTIuNDkxYy41NDUtLjMwMy44ODMtLjg3OS44ODMtMS41MDNWMTcuNzQzYzAtMS4zMDcuNzgtMi40OCAxLjk2My0yLjk0OUwyOCAxMS4zMDh2LTMuMDljMC0zLjIwNC0zLjMzMS01LjIzNS02LjA1NC0zLjY5MnoiLz48L3N2Zz4=);
+        }
+        .app > div.subscribe > aside.inner > .sub.sub--outlook-personal {
+            padding-left: 40px;
+            background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+PHBhdGggZmlsbD0iIzEwMzI2MiIgZD0ibTQzLjI1NSAyMy41NDctNi44MS0zLjk2N3YxMS41OTRINDR2LTYuMzMxYzAtLjUzNC0uMjg0LTEuMDI3LS43NDUtMS4yOTZ6Ii8+PHBhdGggZmlsbD0iIzAwODRkNyIgZD0iTTEzIDEwaDEwdjlIMTN2LTl6Ii8+PHBhdGggZmlsbD0iIzMzYWZlYyIgZD0iTTIzIDEwaDEwdjlIMjN2LTl6Ii8+PHBhdGggZmlsbD0iIzU0ZGFmZiIgZD0iTTMzIDEwaDEwdjlIMzN2LTl6Ii8+PHBhdGggZmlsbD0iIzAyN2FkNCIgZD0iTTIzIDE5aDEwdjlIMjN2LTl6Ii8+PHBhdGggZmlsbD0iIzA1NTNhNCIgZD0iTTIzIDI4aDEwdjlIMjN2LTl6Ii8+PHBhdGggZmlsbD0iIzI1YTJlNSIgZD0iTTMzIDE5aDEwdjlIMzN2LTl6Ii8+PHBhdGggZmlsbD0iIzAyNjJiOCIgZD0iTTMzIDI4aDEwdjlIMzN2LTl6Ii8+PHBhdGggZD0iTTEzIDM3aDMwVjI0LjIzOGwtMTQuMDEgOC0xNS45OS04eiIgb3BhY2l0eT0iLjAxOSIvPjxwYXRoIGQ9Ik0xMyAzN2gzMFYyNC40NzZsLTE0LjAxIDgtMTUuOTktOHoiIG9wYWNpdHk9Ii4wMzgiLz48cGF0aCBkPSJNMTMgMzdoMzBWMjQuNzE0bC0xNC4wMSA4LTE1Ljk5LTh6IiBvcGFjaXR5PSIuMDU3Ii8+PHBhdGggZD0iTTEzIDM3aDMwVjI0Ljk1MmwtMTQuMDEgOC0xNS45OS04eiIgb3BhY2l0eT0iLjA3NiIvPjxwYXRoIGQ9Ik0xMyAzN2gzMFYyNS4xOWwtMTQuMDEgOC0xNS45OS04eiIgb3BhY2l0eT0iLjA5NSIvPjxwYXRoIGQ9Ik0xMyAzN2gzMFYyNS40MjlsLTE0LjAxIDgtMTUuOTktOHoiIG9wYWNpdHk9Ii4xMTQiLz48cGF0aCBkPSJNMTMgMzdoMzBWMjUuNjY3bC0xNC4wMSA4LTE1Ljk5LTh6IiBvcGFjaXR5PSIuMTMzIi8+PHBhdGggZD0iTTEzIDM3aDMwVjI1LjkwNWwtMTQuMDEgOC0xNS45OS04eiIgb3BhY2l0eT0iLjE1MiIvPjxwYXRoIGQ9Ik0xMyAzN2gzMFYyNi4xNDNsLTE0LjAxIDgtMTUuOTktOHoiIG9wYWNpdHk9Ii4xNzEiLz48cGF0aCBkPSJNMTMgMzdoMzBWMjYuMzgxbC0xNC4wMSA4LTE1Ljk5LTh6IiBvcGFjaXR5PSIuMTkxIi8+PHBhdGggZD0iTTEzIDM3aDMwVjI2LjYxOWwtMTQuMDEgOC0xNS45OS04eiIgb3BhY2l0eT0iLjIwOSIvPjxwYXRoIGQ9Ik0xMyAzN2gzMFYyNi44NTdsLTE0LjAxIDgtMTUuOTktOHoiIG9wYWNpdHk9Ii4yMjkiLz48cGF0aCBkPSJNMTMgMzdoMzB2LTkuOTA1bC0xNC4wMSA4LTE1Ljk5LTh6IiBvcGFjaXR5PSIuMjQ4Ii8+PHBhdGggZD0iTTEzIDM3aDMwdi05LjY2N2wtMTQuMDEgOC0xNS45OS04eiIgb3BhY2l0eT0iLjI2NyIvPjxwYXRoIGQ9Ik0xMyAzN2gzMHYtOS40MjlsLTE0LjAxIDgtMTUuOTktOHoiIG9wYWNpdHk9Ii4yODYiLz48cGF0aCBkPSJNMTMgMzdoMzB2LTkuMTlsLTE0LjAxIDgtMTUuOTktOHoiIG9wYWNpdHk9Ii4zMDUiLz48cGF0aCBkPSJNMTMgMzdoMzB2LTguOTUybC0xNC4wMSA4LTE1Ljk5LTh6IiBvcGFjaXR5PSIuMzI0Ii8+PHBhdGggZD0iTTEzIDM3aDMwdi04LjcxNGwtMTQuMDEgOC0xNS45OS04eiIgb3BhY2l0eT0iLjM0MyIvPjxwYXRoIGQ9Ik0xMyAzN2gzMHYtOC40NzZsLTE0LjAxIDgtMTUuOTktOHoiIG9wYWNpdHk9Ii4zNjIiLz48cGF0aCBkPSJNMTMgMzdoMzB2LTguMjM4bC0xNC4wMSA4LTE1Ljk5LTh6IiBvcGFjaXR5PSIuMzgxIi8+PHBhdGggZD0iTTEzIDM3aDMwdi04bC0xNC4wMSA4TDEzIDI5eiIgb3BhY2l0eT0iLjQiLz48bGluZWFyR3JhZGllbnQgaWQ9ImEiIHgxPSIzOC45MjUiIHgyPSIzMi4yODYiIHkxPSIyNC41NTciIHkyPSIzNi4wMjQiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiMzMWFiZWMiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMxNTgyZDUiLz48L2xpbmVhckdyYWRpZW50PjxwYXRoIGZpbGw9InVybCgjYSkiIGQ9Ik0xNS40NDEgNDJoMjYuNTYzYzEuMTA0IDAgMS45OTktLjg4OSAyLTEuOTk0LjAwMy00LjUyMS0uMDA0LTE1LjE2My0uMDA0LTE1LjE2M3MtLjAwNy4yMjItMS43NTEgMS4yMTItMjcuNTA1IDE1LjUxMS0yNy41MDUgMTUuNTExLjIzNC40MzQuNjk3LjQzNHoiLz48bGluZWFyR3JhZGllbnQgaWQ9ImIiIHgxPSIxMy42NjUiIHgyPSI0MS4yODUiIHkxPSI2Ljk5MiIgeTI9IjkuMDc0IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHN0b3Agb2Zmc2V0PSIuMDQyIiBzdG9wLWNvbG9yPSIjMDc2ZGI0Ii8+PHN0b3Agb2Zmc2V0PSIuODUiIHN0b3AtY29sb3I9IiMwNDYxYWYiLz48L2xpbmVhckdyYWRpZW50PjxwYXRoIGZpbGw9InVybCgjYikiIGQ9Ik00MyAxMEgxM1Y4YzAtMS4xMDUuODk1LTIgMi0yaDI2YzEuMTA1IDAgMiAuODk1IDIgMnYyeiIvPjxsaW5lYXJHcmFkaWVudCBpZD0iYyIgeDE9IjI4LjE1MyIgeDI9IjIzLjYzOCIgeTE9IjMzLjIxOCIgeTI9IjQxLjEiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiMzM2FjZWUiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMxYjhlZGYiLz48L2xpbmVhckdyYWRpZW50PjxwYXRoIGZpbGw9InVybCgjYykiIGQ9Ik0xMyAyNXYxNWMwIDEuMTA1Ljg5NSAyIDIgMkg0Mi4wMDRjLjQ2MiAwIC44ODMtLjE2MiAxLjIyMS0uNDI1TDEzIDI1eiIvPjxwYXRoIGQ9Ik0yMS4zMTkgMTNIMTN2MjRoOC4zMTlDMjMuMzUyIDM3IDI1IDM1LjM1MiAyNSAzMy4zMTlWMTYuNjgxQzI1IDE0LjY0OCAyMy4zNTIgMTMgMjEuMzE5IDEzeiIgb3BhY2l0eT0iLjA1Ii8+PHBhdGggZD0iTTIxLjIxMyAzNkgxM1YxMy4zMzNoOC4yMTNjMS43MjQgMCAzLjEyMSAxLjM5NyAzLjEyMSAzLjEyMXYxNi40MjVDMjQuMzMzIDM0LjYwMyAyMi45MzYgMzYgMjEuMjEzIDM2eiIgb3BhY2l0eT0iLjA3Ii8+PHBhdGggZD0iTTIxLjEwNiAzNUgxM1YxMy42NjdoOC4xMDZjMS40MTQgMCAyLjU2IDEuMTQ2IDIuNTYgMi41NlYzMi40NGMuMDAxIDEuNDE0LTEuMTQ2IDIuNTYtMi41NiAyLjU2eiIgb3BhY2l0eT0iLjA5Ii8+PGxpbmVhckdyYWRpZW50IGlkPSJkIiB4MT0iMy41MyIgeDI9IjIyLjQxIiB5MT0iMTQuNTMiIHkyPSIzMy40MSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzE3ODRkOCIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzA4NjRjNSIvPjwvbGluZWFyR3JhZGllbnQ+PHBhdGggZmlsbD0idXJsKCNkKSIgZD0iTTIxIDM0SDVjLTEuMTA1IDAtMi0uODk1LTItMlYxNmMwLTEuMTA1Ljg5NS0yIDItMmgxNmMxLjEwNSAwIDIgLjg5NSAyIDJ2MTZjMCAxLjEwNS0uODk1IDItMiAyeiIvPjxwYXRoIGZpbGw9IiNmZmYiIGQ9Ik0xMyAxOC42OTFjLTMuMTExIDAtNC45ODUgMi4zNzctNC45ODUgNS4zMDlTOS44ODIgMjkuMzA5IDEzIDI5LjMwOWMzLjExOSAwIDQuOTg1LTIuMzc3IDQuOTg1LTUuMzA4IDAtMi45MzMtMS44NzQtNS4zMS00Ljk4NS01LjMxem0wIDguODI2Yy0xLjc2NSAwLTIuODItMS41NzQtMi44Mi0zLjUxNnMxLjA2LTMuNTE2IDIuODItMy41MTYgMi44MjEgMS41NzUgMi44MjEgMy41MTYtMS4wNTcgMy41MTYtMi44MjEgMy41MTZ6Ii8+PC9zdmc+);
+        }
+        .app > div.subscribe > aside.inner > .sub.sub--outlook-local {
+            padding-left: 40px;
+            background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+PGxpbmVhckdyYWRpZW50IGlkPSJhIiB4MT0iMjMuMDIiIHgyPSIyNS4wNjMiIHkxPSI0LjM2MiIgeTI9IjE4LjA0NCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPjxzdG9wIG9mZnNldD0iLjA0MiIgc3RvcC1jb2xvcj0iIzA3NmRiNCIvPjxzdG9wIG9mZnNldD0iLjg1IiBzdG9wLWNvbG9yPSIjMDQ2MWFmIi8+PC9saW5lYXJHcmFkaWVudD48cGF0aCBmaWxsPSJ1cmwoI2EpIiBkPSJNNDIgMTRINlY4YzAtMS4xMDUuODk1LTIgMi0yaDMyYzEuMTA1IDAgMiAuODk1IDIgMnY2eiIvPjxsaW5lYXJHcmFkaWVudCBpZD0iYiIgeDE9IjIxLjYzNSIgeDI9IjI3LjU2NyIgeTE9IjYuNDE3IiB5Mj0iNTguMTkzIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjMzNiZWYwIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMGE4NWQ5Ii8+PC9saW5lYXJHcmFkaWVudD48cGF0aCBmaWxsPSJ1cmwoI2IpIiBkPSJNNiAxNHYyNmMwIDEuMTA1Ljg5NSAyIDIgMmgzMmMxLjEwNSAwIDItLjg5NSAyLTJWMTRINnoiLz48cGF0aCBmaWxsPSIjZmZmIiBkPSJNMjEgMjNoLTJjLS41NTIgMC0xLS40NDgtMS0xdi0yYzAtLjU1Mi40NDgtMSAxLTFoMmMuNTUyIDAgMSAuNDQ4IDEgMXYyYzAgLjU1Mi0uNDQ4IDEtMSAxek0yOSAyM2gtMmMtLjU1MiAwLTEtLjQ0OC0xLTF2LTJjMC0uNTUyLjQ0OC0xIDEtMWgyYy41NTIgMCAxIC40NDggMSAxdjJjMCAuNTUyLS40NDggMS0xIDF6TTM3IDIzaC0yYy0uNTUyIDAtMS0uNDQ4LTEtMXYtMmMwLS41NTIuNDQ4LTEgMS0xaDJjLjU1MiAwIDEgLjQ0OCAxIDF2MmMwIC41NTItLjQ0OCAxLTEgMXpNMjEgMzBoLTJjLS41NTIgMC0xLS40NDgtMS0xdi0yYzAtLjU1Mi40NDgtMSAxLTFoMmMuNTUyIDAgMSAuNDQ4IDEgMXYyYzAgLjU1Mi0uNDQ4IDEtMSAxek0xMyAzMGgtMmMtLjU1MiAwLTEtLjQ0OC0xLTF2LTJjMC0uNTUyLjQ0OC0xIDEtMWgyYy41NTIgMCAxIC40NDggMSAxdjJjMCAuNTUyLS40NDggMS0xIDF6TTI5IDMwaC0yYy0uNTUyIDAtMS0uNDQ4LTEtMXYtMmMwLS41NTIuNDQ4LTEgMS0xaDJjLjU1MiAwIDEgLjQ0OCAxIDF2MmMwIC41NTItLjQ0OCAxLTEgMXpNMjEgMzdoLTJjLS41NTIgMC0xLS40NDgtMS0xdi0yYzAtLjU1Mi40NDgtMSAxLTFoMmMuNTUyIDAgMSAuNDQ4IDEgMXYyYzAgLjU1Mi0uNDQ4IDEtMSAxek0xMyAzN2gtMmMtLjU1MiAwLTEtLjQ0OC0xLTF2LTJjMC0uNTUyLjQ0OC0xIDEtMWgyYy41NTIgMCAxIC40NDggMSAxdjJjMCAuNTUyLS40NDggMS0xIDF6TTI5IDM3aC0yYy0uNTUyIDAtMS0uNDQ4LTEtMXYtMmMwLS41NTIuNDQ4LTEgMS0xaDJjLjU1MiAwIDEgLjQ0OCAxIDF2MmMwIC41NTItLjQ0OCAxLTEgMXpNMzcgMzBoLTJjLS41NTIgMC0xLS40NDgtMS0xdi0yYzAtLjU1Mi40NDgtMSAxLTFoMmMuNTUyIDAgMSAuNDQ4IDEgMXYyYzAgLjU1Mi0uNDQ4IDEtMSAxeiIvPjxwYXRoIGQ9Ik0xNCA2djMuNWMwIC4yNzYtLjIyNS41LS41LjVzLS41LS4yMjQtLjUtLjVWNmgtMnYzLjVjMCAxLjM3OCAxLjEyMSAyLjUgMi41IDIuNVMxNiAxMC44NzggMTYgOS41VjZoLTJ6IiBvcGFjaXR5PSIuMDUiLz48cGF0aCBkPSJNMTQuNSA2djMuNWMwIC41NTEtLjQ0OCAxLTEgMXMtMS0uNDQ5LTEtMVY2aC0xdjMuNWMwIDEuMTAzLjg5NyAyIDIgMnMyLS44OTcgMi0yVjZoLTF6IiBvcGFjaXR5PSIuMDciLz48cGF0aCBkPSJNMzUgNnYzLjVjMCAuMjc2LS4yMjUuNS0uNS41cy0uNS0uMjI0LS41LS41VjZoLTJ2My41YzAgMS4zNzggMS4xMjEgMi41IDIuNSAyLjVTMzcgMTAuODc4IDM3IDkuNVY2aC0yeiIgb3BhY2l0eT0iLjA1Ii8+PHBhdGggZD0iTTM1LjUgNnYzLjVjMCAuNTUxLS40NDggMS0xIDFzLTEtLjQ0OS0xLTFWNmgtMXYzLjVjMCAxLjEwMy44OTcgMiAyIDJzMi0uODk3IDItMlY2aC0xeiIgb3BhY2l0eT0iLjA3Ii8+PHBhdGggZmlsbD0iIzU0ZGFmZiIgZD0iTTM0LjUgMTFjLS44MjggMC0xLjUtLjY3Mi0xLjUtMS41di01YzAtLjgyOC42NzItMS41IDEuNS0xLjVzMS41LjY3MiAxLjUgMS41djVjMCAuODI4LS42NzIgMS41LTEuNSAxLjV6TTEzLjUgMTFjLS44MjggMC0xLjUtLjY3Mi0xLjUtMS41di01YzAtLjgyOC42NzItMS41IDEuNS0xLjVzMS41LjY3MiAxLjUgMS41djVjMCAuODI4LS42NzIgMS41LTEuNSAxLjV6Ii8+PC9zdmc+);
+        }
+        .app > div.subscribe > aside.inner > .sub.sub--google {
+            padding-left: 40px;
+            background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTEzIDEzaDIydjIySDEzeiIvPjxwYXRoIGZpbGw9IiMxZTg4ZTUiIGQ9Im0yNS42OCAyMC45MiAxLjAwOCAxLjQ0IDEuNTg0LTEuMTUydjguMzUySDMwVjE4LjYxNmgtMS40NHpNMjIuOTQzIDIzLjc0NWMuNjI1LS41NzQgMS4wMTMtMS4zNyAxLjAxMy0yLjI0OSAwLTEuNzQ3LTEuNTMzLTMuMTY4LTMuNDE3LTMuMTY4LTEuNjAyIDAtMi45NzIgMS4wMDktMy4zMyAyLjQ1M2wxLjY1Ny40MjFjLjE2NS0uNjY0Ljg2OC0xLjE0NiAxLjY3My0xLjE0Ni45NDIgMCAxLjcwOS42NDYgMS43MDkgMS40NCAwIC43OTQtLjc2NyAxLjQ0LTEuNzA5IDEuNDRoLS45OTd2MS43MjhoLjk5N2MxLjA4MSAwIDEuOTkzLjc1MSAxLjk5MyAxLjY0IDAgLjkwNC0uODY2IDEuNjQtMS45MzEgMS42NC0uOTYyIDAtMS43ODQtLjYxLTEuOTE0LTEuNDE4TDE3IDI2LjgwMmMuMjYyIDEuNjM2IDEuODEgMi44NyAzLjYgMi44NyAyLjAwNyAwIDMuNjQtMS41MTEgMy42NC0zLjM2OCAwLTEuMDIzLS41MDQtMS45NDEtMS4yOTctMi41NTl6Ii8+PHBhdGggZmlsbD0iI2ZiYzAyZCIgZD0iTTM0IDQySDE0bC0xLTQgMS00aDIwbDEgNHoiLz48cGF0aCBmaWxsPSIjNGNhZjUwIiBkPSJtMzggMzUgNC0xVjE0bC00LTEtNCAxdjIweiIvPjxwYXRoIGZpbGw9IiMxZTg4ZTUiIGQ9Im0zNCAxNCAxLTQtMS00SDlDNy4zNDMgNiA2IDcuMzQzIDYgOXYyNWw0IDEgNC0xVjE0aDIweiIvPjxwYXRoIGZpbGw9IiNlNTM5MzUiIGQ9Ik0zNCAzNHY4bDgtOHoiLz48cGF0aCBmaWxsPSIjMTU2NWMwIiBkPSJNMzkgNmgtNXY4aDhWOWMwLTEuNjU3LTEuMzQzLTMtMy0zek05IDQyaDV2LThINnY1YzAgMS42NTcgMS4zNDMgMyAzIDN6Ii8+PC9zdmc+);
+        }
+        .app > div.subscribe > aside.inner > .sub.sub--android {
+            padding-left: 40px;
+            background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+PHBhdGggZmlsbD0iIzdjYjM0MiIgZD0iTTEyIDI5YzAgMS4xLS45IDItMiAycy0yLS45LTItMnYtOWMwLTEuMS45LTIgMi0yczIgLjkgMiAydjl6bTI4IDBjMCAxLjEtLjkgMi0yIDJzLTItLjktMi0ydi05YzAtMS4xLjktMiAyLTJzMiAuOSAyIDJ2OXpNMjIgNDBjMCAxLjEtLjkgMi0yIDJzLTItLjktMi0ydi05YzAtMS4xLjktMiAyLTJzMiAuOSAyIDJ2OXptOCAwYzAgMS4xLS45IDItMiAycy0yLS45LTItMnYtOWMwLTEuMS45LTIgMi0yczIgLjkgMiAydjl6Ii8+PHBhdGggZmlsbD0iIzdjYjM0MiIgZD0iTTE0IDE4djE1YzAgMS4xLjkgMiAyIDJoMTZjMS4xIDAgMi0uOSAyLTJWMThIMTR6TTI0IDhjLTYgMC05LjcgMy42LTEwIDhoMjBjLS4zLTQuNC00LTgtMTAtOHptLTQgNS42Yy0uNiAwLTEtLjQtMS0xcy40LTEgMS0xIDEgLjQgMSAxYzAgLjUtLjQgMS0xIDF6bTggMGMtLjYgMC0xLS40LTEtMXMuNC0xIDEtMSAxIC40IDEgMWMwIC41LS40IDEtMSAxeiIvPjxwYXRoIGZpbGw9IiM3Y2IzNDIiIGQ9Ik0yOC4zIDEwLjVjLS4yIDAtLjQtLjEtLjYtLjItLjUtLjMtLjYtLjktLjMtMS40bDEuNy0yLjVjLjMtLjUuOS0uNiAxLjQtLjMuNS4zLjYuOS4zIDEuNEwyOS4xIDEwYy0uMS4zLS40LjUtLjguNXptLTktLjRjLS4zIDAtLjctLjItLjgtLjVsLTEuMy0yLjFjLS4zLS41LS4yLTEuMS4zLTEuNC41LS4zIDEuMS0uMiAxLjQuM2wxLjMgMi4xYy4zLjUuMiAxLjEtLjMgMS40LS4yLjEtLjQuMi0uNi4yeiIvPjwvc3ZnPg==);
+        }
+        .app:not(.subscribe-visible) > div.subscribe {
+            display: none;
+        }
         @media screen and (max-width: 720px) {
             .app {
                 grid-template-rows: min-content 1fr;
@@ -306,6 +410,9 @@
                 --fc-event-text-color: #eee;
                 --fc-event-border-color: #333;
             }
+            .app > div.subscribe {
+                background: rgba(0, 0, 0, 0.80);
+            }
         }
     </style>
 </head>
@@ -332,6 +439,43 @@
             <section class="error" hidden></section>
             <section class="calendar"></section>
         </main>
+        <div class="subscribe">
+            <aside class="inner">
+                <header>
+                    <div class="title">Subscribe</div>
+                    <button class="delete close">X</button>
+                </header>
+                <div class="sub" type="text">
+                    <div class="name">Other</div>
+                    <div class="desc">Copy and paste this link into your calendar application.</div>
+                    <input type="text" autocomplete="off" autocapitalize="off" readonly="">
+                </div>
+                <a class="sub sub--google" target="_blank">
+                    <div class="name">Google Calendar</div>
+                    <div class="desc">Updates every 24+ hours.</div>
+                </a>
+                <a class="sub sub--outlook-work" target="_blank">
+                    <div class="name">Office 365<span> (Outlook.com Work)</span></div>
+                    <div class="desc">Updates every 3 hours.</div>
+                </a>
+                <a class="sub sub--outlook-personal" target="_blank">
+                    <div class="name">Outlook.com<span> (Personal)</span></div>
+                    <div class="desc">Updates every 3 hours.</div>
+                </a>
+                <a class="sub sub--outlook-local" target="_blank">
+                    <div class="name">Outlook<span> (Windows)</span></div>
+                    <div class="desc">Updates on launch and every 3 hours.</div>
+                </a>
+                <a class="sub sub--android" target="_blank">
+                    <div class="name">Android<span> - ICSx5</span></div>
+                    <div class="desc">Sync using the ICSx5 Android app.</div>
+                </a>
+                <a class="sub sub--apple" target="_blank">
+                    <div class="name">Apple Calendar<span> - macOS/iOS/iPadOS</span></div>
+                    <div class="desc">Updates on launch and every 1-3 hours.</div>
+                </a>
+            </aside>
+        </div>
     </div>
     <script src="https://unpkg.com/@fullcalendar/core@6.1.9/index.global.min.js"></script>
     <script src="https://unpkg.com/@fullcalendar/list@6.1.9/index.global.min.js"></script>
@@ -651,9 +795,40 @@
                 app.classList.toggle("options-expanded")
             })
 
+            const sub_fallback = app.querySelector("div.subscribe div.sub input")
+            const sub_google = app.querySelector("div.subscribe a.sub--google")
+            const sub_apple = app.querySelector("div.subscribe a.sub--apple")
+            const sub_outlook_work = app.querySelector("div.subscribe a.sub--outlook-work")
+            const sub_outlook_personal = app.querySelector("div.subscribe a.sub--outlook-personal")
+            const sub_outlook_local = app.querySelector("div.subscribe a.sub--outlook-local")
+            const sub_android = app.querySelector("div.subscribe a.sub--android")
+            qpo.watch(() => {
+                const u = new URL(calURL("ics"))
+                const u_http = u.toString()
+                const u_http_enc = encodeURIComponent(u_http).replace(/\+/g, "%2B").replace(/%20/g, "+")
+                u.protocol = "webcal"
+                const u_webcal = u.toString()
+                sub_fallback.value = u_http
+                sub_google.href = `https://calendar.google.com/calendar/u/0/r?cid=${u_http_enc}&pli=1`
+                sub_apple.href = u_webcal
+                sub_outlook_work.href = `https://outlook.office.com/calendar/0/addfromweb?url=${u_http_enc}&name=Calendar&mkt=en-001`
+                sub_outlook_personal.href = `https://outlook.live.com/calendar/0/addfromweb?url=${u_http_enc}&name=Calendar&mkt=en-001`
+                sub_outlook_local.href = u_webcal
+                sub_android.href = u_webcal
+            })
+            sub_fallback.addEventListener("focus", () => {
+                sub_fallback.select()
+            })
+
             const btn_ics = app.querySelector("nav.toolbar > button.subscribe")
+            const btn_sub_close = app.querySelector("div.subscribe button.close")
             btn_ics.addEventListener("click", () => {
-                prompt("Subscribe to the following link in your calendar application.", calURL("ics"))
+                app.classList.add("subscribe-visible")
+                sub_fallback.focus()
+                sub_fallback.select()
+            })
+            btn_sub_close.addEventListener("click", () => {
+                app.classList.remove("subscribe-visible")
             })
 
             const viewTypes = ["listWeek", "timeGridWeek", "timeGridThreeDay"]

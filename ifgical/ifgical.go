@@ -573,7 +573,7 @@ func (c *Calendar) RenderICS(o Options) []byte {
 
 			// write event status information if it's the only event or a recurrence exception
 			if !ar.Recur() || !base {
-				if !o.FakeCancelled {
+				if ai.IsCancelled && !o.FakeCancelled {
 					b = icalAppendPropRaw(b, "STATUS", "CANCELLED")
 				}
 			}

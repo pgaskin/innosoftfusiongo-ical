@@ -46,6 +46,21 @@ type activityKey struct {
 	Weekday    weekdayMapOf[bool]
 }
 
+// for debugging
+func (ak activityKey) String() string {
+	return fmt.Sprintf("ak(id=%s loc=%q st=%s wd=%s)",
+		ak.ActivityID,
+		ak.Location,
+		ak.StartTime.StringCompact(),
+		strings.Join(weekdayFilterMap(ak.Weekday, func(wd time.Weekday, x bool) (string, bool) {
+			if x {
+				return strings.ToUpper(time.Weekday(wd).String()[:2]), true
+			}
+			return "", false
+		}), ","),
+	)
+}
+
 // activityInstance contains fields specific to an instance.
 type activityInstance struct {
 	IsCancelled bool
@@ -169,6 +184,7 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 
 			// if we have an exact match, set it to cancelled and drop the fake cancellation
 			if m := fn(true); len(m) == 1 {
+				slog.Debug(fmt.Sprintf("dropping fake cancellation activity %d (id=%s name=%q date=%s) for existing cancelled activity %d (id=%s name=%q)", i, schedule.Activities[i].ActivityID, schedule.Activities[i].Activity, schedule.Activities[i].Time.Date, m[0], schedule.Activities[m[0]].ActivityID, schedule.Activities[m[0]].Activity))
 				stupidCancelled = append(stupidCancelled, i)
 				cancelledActivities = append(cancelledActivities, m[0])
 				continue
@@ -176,6 +192,7 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 
 			// if not, but we have a match for the recurrence group, add an instance and drop the fake cancellation
 			if m := fn(false); len(m) >= 1 {
+				slog.Debug(fmt.Sprintf("converting fake cancellation activity %d (id=%s name=%q date=%s) into real cancellation for activity %d (id=%s name=%q)", i, schedule.Activities[i].ActivityID, schedule.Activities[i].Activity, schedule.Activities[i].Time.Date, m[0], schedule.Activities[m[0]].ActivityID, schedule.Activities[m[0]].Activity))
 				stupidCancelled = append(stupidCancelled, i)
 				syntheticActivities = append(syntheticActivities, schedule.Activities[m[0]])
 				syntheticActivities[len(syntheticActivities)-1].Time = fa.Time
@@ -272,12 +289,13 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 			})
 
 			// re-group the activities including the weekday split
-			for _, wds := range weekdaysByEt {
+			for et, wds := range weekdaysByEt {
 				activityKeyNew := ak
 				activityKeyNew.Weekday = wds
 				sch[activityKeyNew] = flatFilter(actByWeekday[:], func(i int) bool {
 					return wds[i]
 				})
+				slog.Debug(fmt.Sprintf("recurrence group %v (et=%s, n=%d)", activityKeyNew, et.StringCompact(), len(sch[activityKeyNew])))
 			}
 		},
 	)
@@ -500,8 +518,8 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 					if len(tmp) != 0 {
 						panic("wtf: merged activity doesn't include all dates")
 					}
-					//fmt.Println(aki, aki2, ak, ak2)
 				}
+				slog.Debug(fmt.Sprintf("merge %s (n=%d) <- %s (n=%d)", ak2, len(ar2.Instances), ak, len(ar.Instances)))
 
 				// we've merged it
 				merged = append(merged, aki)

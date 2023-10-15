@@ -42,7 +42,7 @@ type Calendar struct {
 type activityKey struct {
 	ActivityID string
 	Location   string
-	StartTime  fusiongo.Time
+	StartTime  fusiongo.Time // all instances with this activity/location/start are part of this key, but not all may have this start time (if another key was merged into this one... see the end of initSchedule)
 	Weekday    weekdayMapOf[bool]
 }
 
@@ -52,6 +52,7 @@ type activityInstance struct {
 	Activity    string
 	Description string
 	Date        fusiongo.Date
+	StartTime   fusiongo.Time
 	EndTime     fusiongo.Time
 	Categories  []string
 	CategoryIDs []string
@@ -242,6 +243,7 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 				Activity:    fai.Activity,
 				Description: fai.Description,
 				Date:        fai.Time.Date,
+				StartTime:   fai.Time.TimeRange.Start,
 				EndTime:     fai.Time.TimeRange.End,
 				Categories:  schedule.Categories[i].Category,
 				CategoryIDs: schedule.Categories[i].CategoryID,
@@ -312,6 +314,9 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 			Instances: ais,
 			Base: activityInstance{
 
+				// use the start time from the key
+				StartTime: ak.StartTime,
+
 				// set the fields to the first (for determinism) most common values
 				Activity: mostCommonBy(ais, func(ai activityInstance) string {
 					return ai.Activity
@@ -338,6 +343,196 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 		}
 	}
 
+	// merge recurrence groups which are strict subsets of recurrence exclusions (plus/minus the previous/next occurrence)
+	// example: event with instances MO/WE on MO wk1 and WE wk2 (with a different start time, but same end time) merges into event with instances on MO/WE/FR on WE wk1, FR wk1, MO wk2, FR wk2
+	// example: testdata/20231015/school110 lane swim shallow end at 16:00-18:00 TU merges with shallow end lane swim 14:30-18:00 TU
+	//
+	//	FROM
+	//	  Member Lane Swim
+	//	   In Pool - Shallow End
+	//	   Starts Tue 2023-10-17
+	//	   Until Tue 2023-11-21
+	//	   Repeats 14:30 - 18:00 [TU]
+	//	   • not on Tue Oct 24
+	//
+	//	  Member Lane Swim
+	//	   In Pool - Shallow End
+	//	   Starts Tue 2023-10-24
+	//	   Until Tue 2023-11-28
+	//	   Repeats 16:00 - 18:00 [TU]
+	//	   • not on Tue Oct 31
+	//	   • not on Tue Nov 07
+	//	   • not on Tue Nov 14
+	//	   • not on Tue Nov 21
+	//
+	//	  Member Lane Swim
+	//	   In Pool - Shallow End
+	//	   Starts Thu 2023-10-12
+	//	   Until Thu 2023-11-23
+	//	   Repeats 14:30 - 17:45 [TH]
+	//	   • not on Thu Oct 26
+	//
+	//	  Member Lane Swim
+	//	   In Pool - Shallow End
+	//	   On Thu 2023-10-26
+	//	   At 16:00
+	//
+	// TO
+	//	  Member Lane Swim
+	//	   In Pool - Shallow End
+	//	   Starts Tue 2023-10-17
+	//	   Until Tue 2023-11-28
+	//	   Repeats 14:30 - 18:00 [TU]
+	//	   • starts at 16:00 on Tue Oct 24
+	//	   • starts at 16:00 on Tue Nov 28
+	//
+	//	  Member Lane Swim
+	//	   In Pool - Shallow End
+	//	   Starts Thu 2023-10-12
+	//	   Until Thu 2023-11-23
+	//	   Repeats 14:30 - 17:45 [TH]
+	//	   • starts at 16:00 on Thu Oct 26
+	//
+	// note: test using the describe recurrence stuff, e.g., with the last jq example in the README
+	// note: this is really inefficient, but I'd rather get it right, and keep the rest of the logic used for most cases simple
+	// note: we don't have to treat non-recurring instances specially since they'll automatically become recurring if we add another instance
+	// note: we don't attempt to find the optimal solution for cases where there are chains of merges since this is a rare edge-case anyways
+	{
+		var merged []int // keys which have been merged into another
+	sch1:
+		for aki, ak := range c.schK {
+			ar := c.sch[ak]
+
+			// get the non-excluded dates
+			var arDates []fusiongo.Date
+			ar.Iter(func(d fusiongo.Date, _ bool, i int) {
+				if i != -1 {
+					arDates = append(arDates, d)
+				}
+			})
+
+			// find other keys we can merge ak into
+		sch2:
+			for aki2, ak2 := range c.schK {
+				if aki == aki2 || slices.Contains(merged, aki2) {
+					continue
+				}
+				ar2 := c.sch[ak2]
+
+				// ensure the key is the is the same other than the start time
+				if ak.ActivityID != ak2.ActivityID || ak.Location != ak2.Location {
+					continue
+				}
+
+				// ensure that the weekdays are a superset (this is checked later too, but checking it first is faster)
+				for i, c := range ar.Weekday {
+					if ar2.Weekday[i] && !c {
+						continue sch2
+					}
+				}
+
+				// find the previous recurrence before the first
+				ar2DateBefore := ar2.Instances[0].Date.AddDays(-1)
+				for !ar2.Weekday[ar2DateBefore.Weekday()] {
+					ar2DateBefore = ar2DateBefore.AddDays(-1)
+				}
+
+				// find the next recurrence after the last
+				ar2DateAfter := ar2.Instances[len(ar2.Instances)-1].Date.AddDays(1)
+				for !ar2.Weekday[ar2DateAfter.Weekday()] {
+					ar2DateAfter = ar2DateAfter.AddDays(-1)
+				}
+
+				// get the non-excluded dates
+				var ar2Dates []fusiongo.Date
+				ar2.Iter(func(d fusiongo.Date, _ bool, i int) {
+					if i != -1 {
+						ar2Dates = append(ar2Dates, d)
+					}
+				})
+
+				// ensure the dates which actually have instances are distinct
+				for _, d := range arDates {
+					if slices.Contains(ar2Dates, d) {
+						continue sch2
+					}
+				}
+
+				// get the potential recurrence dates according to the rule
+				var ar2Recurrences []fusiongo.Date
+				ar2Recurrences = append(ar2Recurrences, ar2DateBefore)
+				ar2.Iter(func(d fusiongo.Date, _ bool, _ int) {
+					ar2Recurrences = append(ar2Recurrences, d)
+				})
+				ar2Recurrences = append(ar2Recurrences, ar2DateAfter)
+
+				// ensure it is a superset of recurrence dates
+				for _, d := range arDates {
+					if !slices.Contains(ar2Recurrences, d) {
+						continue sch2
+					}
+				}
+
+				// merge the instances
+				ar2.Instances = append(ar2.Instances, ar.Instances...)
+				c.sch[ak2] = ar2
+
+				// deterministically sort the instances again
+				slices.SortStableFunc(ar2.Instances, func(a, b activityInstance) int {
+					return a.Date.Compare(b.Date)
+				})
+
+				// update the start date
+				ar2.Base.Date = ar2.Instances[0].Date
+				c.sch[ak2] = ar2
+
+				// sanity check
+				{
+					tmp := slices.Clone(arDates)
+					ar2.Iter(func(d fusiongo.Date, ex bool, _ int) {
+						if i := slices.Index(tmp, d); i != -1 {
+							if !ex {
+								panic("wtf: merged activity dates aren't exceptions")
+							}
+							tmp = slices.Delete(tmp, i, i+1)
+						}
+					})
+					if len(tmp) != 0 {
+						panic("wtf: merged activity doesn't include all dates")
+					}
+					//fmt.Println(aki, aki2, ak, ak2)
+				}
+
+				// we've merged it
+				merged = append(merged, aki)
+				continue sch1
+			}
+		}
+
+		// delete the merged keys
+		for i := len(merged) - 1; i >= 0; i-- {
+			x := merged[i]
+			k := c.schK[x]
+			c.schK = slices.Delete(c.schK, x, x+1)
+			delete(c.sch, k)
+		}
+
+		// update the key start times to the most common to reduce the number of exceptions
+		// note: we could also eliminate the need for this by building a list of merge candidates, weighting graph edges by the number of exceptions, then minimizing the graph
+		for aki, ak := range c.schK {
+			ar := c.sch[ak]
+			if t := mostCommonBy(ar.Instances, func(ai activityInstance) fusiongo.Time {
+				return ai.StartTime
+			}); ak.StartTime != t {
+				delete(c.sch, ak)
+				ak.StartTime = t
+				ar.Base.StartTime = t
+				c.schK[aki] = ak
+				c.sch[ak] = ar
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -359,6 +554,7 @@ func (r activityRecurrences) Iter(fn func(d fusiongo.Date, ex bool, i int)) {
 				case ai.IsCancelled != aib.IsCancelled:
 				case ai.Activity != aib.Activity:
 				case ai.Description != aib.Description:
+				case ai.StartTime != aib.StartTime:
 				case ai.EndTime != aib.EndTime:
 				case !slices.Equal(ai.Categories, aib.Categories):
 				case !slices.Equal(ai.CategoryIDs, aib.CategoryIDs):
@@ -547,7 +743,7 @@ func (c *Calendar) RenderICS(o Options) []byte {
 			"%s-%x-%s-%02d%02d%02d@school%d.innosoftfusiongo.com",
 			ak.ActivityID, sha1.Sum([]byte(ak.Location)),
 			strings.Join(akDays, "-"),
-			ak.StartTime.Hour, ak.StartTime.Minute, ak.StartTime.Second,
+			ak.StartTime.Hour, ak.StartTime.Minute, ak.StartTime.Second, // yes, we use the activityKey start time
 			c.id,
 		)
 
@@ -581,8 +777,8 @@ func (c *Calendar) RenderICS(o Options) []byte {
 			// write more event info
 			b = icalAppendPropText(b, "LOCATION", ak.Location)
 			b = icalAppendPropText(b, "DESCRIPTION", ai.Description+excDesc)
-			b = icalAppendPropDateTimeLocal(b, "DTSTART", ak.StartTime.WithDate(ai.Date), c.tz)
-			b = icalAppendPropDateTimeLocal(b, "DTEND", ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End(), c.tz)
+			b = icalAppendPropDateTimeLocal(b, "DTSTART", ai.StartTime.WithDate(ai.Date), c.tz)
+			b = icalAppendPropDateTimeLocal(b, "DTEND", ai.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End(), c.tz)
 			// note: not CATEGORIES since it isn't supported by most applications, and it breaks the Outlook Web App (causing the filter list to be empty) as of 2023-09-23
 
 			// write custom props
@@ -592,6 +788,7 @@ func (c *Calendar) RenderICS(o Options) []byte {
 			}
 
 			// write recurrence info if it's a recurring event
+			// note: we use the activityKey start time
 			if ar.Recur() {
 				if base {
 					b = icalAppendPropRaw(b, "RRULE", fmt.Sprintf(
@@ -719,6 +916,9 @@ func (c *Calendar) RenderJSON(o Options) []byte {
 				if i == -2 || ai.Description != ar.Base.Description {
 					b = jsonStr(jsonKey(b, "description"), ai.Description)
 				}
+				if i == -2 || ai.StartTime != ar.Base.StartTime {
+					b = jsonStr(jsonKey(b, "startTime"), ai.StartTime.StringCompact())
+				}
 				if i == -2 || ai.EndTime != ar.Base.EndTime {
 					b = jsonStr(jsonKey(b, "endTime"), ai.EndTime.StringCompact())
 				}
@@ -732,12 +932,12 @@ func (c *Calendar) RenderJSON(o Options) []byte {
 					}
 					b = jsonObject(b, ']')
 				}
-				b = jsonStr(jsonKey(b, "_start"), ak.StartTime.WithDate(ai.Date).String())
-				b = jsonTime(jsonKey(b, "_start_at"), ak.StartTime.WithDate(ai.Date).In(c.tz))
-				b = jsonStr(jsonKey(b, "_end"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().String())
-				b = jsonTime(jsonKey(b, "_end_at"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz))
-				b = jsonStr(jsonKey(b, "_duration"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).Sub(ak.StartTime.WithDate(ai.Date).In(c.tz)).Truncate(time.Second).String())
-				b = jsonInt(jsonKey(b, "_duration_secs"), int(ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).Sub(ak.StartTime.WithDate(ai.Date).In(c.tz)).Truncate(time.Second).Seconds()))
+				b = jsonStr(jsonKey(b, "_start"), ai.StartTime.WithDate(ai.Date).String())
+				b = jsonTime(jsonKey(b, "_start_at"), ai.StartTime.WithDate(ai.Date).In(c.tz))
+				b = jsonStr(jsonKey(b, "_end"), ai.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().String())
+				b = jsonTime(jsonKey(b, "_end_at"), ai.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz))
+				b = jsonStr(jsonKey(b, "_duration"), ai.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).Sub(ai.StartTime.WithDate(ai.Date).In(c.tz)).Truncate(time.Second).String())
+				b = jsonInt(jsonKey(b, "_duration_secs"), int(ai.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).Sub(ai.StartTime.WithDate(ai.Date).In(c.tz)).Truncate(time.Second).Seconds()))
 			}
 		}
 
@@ -815,8 +1015,8 @@ func (c *Calendar) RenderFullCalendarJSON(o Options) []byte {
 					if !ai.IsCancelled || !o.DeleteCancelled {
 						b = jsonObject(b, '{')
 						b = jsonStr(jsonKey(b, "title"), ai.Activity)
-						b = jsonInt(jsonKey(b, "start"), ak.StartTime.WithDate(ai.Date).In(c.tz).UnixMilli())
-						b = jsonInt(jsonKey(b, "end"), ak.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).UnixMilli())
+						b = jsonInt(jsonKey(b, "start"), ai.StartTime.WithDate(ai.Date).In(c.tz).UnixMilli())
+						b = jsonInt(jsonKey(b, "end"), ai.StartTime.WithEnd(ai.EndTime).WithDate(ai.Date).End().In(c.tz).UnixMilli())
 						b = jsonBool(jsonKey(b, "allDay"), false)
 						b = jsonObject(jsonKey(b, "extendedProps"), '{')
 						b = jsonStr(jsonKey(b, "description"), ai.Description+rd) // same as icalendar plugin
@@ -892,8 +1092,17 @@ func (c *Calendar) describeRecurrence(ak activityKey, schFilter map[activityKey]
 					case ai.IsCancelled:
 						diff = "cancelled"
 						hasDiff = true
-					case ai.EndTime != ar.Base.EndTime:
-						diff = "ends at " + ai.EndTime.StringCompact()
+					case ai.StartTime != ar.Base.StartTime || ai.EndTime != ar.Base.EndTime:
+						s := ai.StartTime != ar.Base.StartTime
+						e := ai.EndTime != ar.Base.EndTime
+						switch {
+						case s && e:
+							diff = "starts at " + ai.StartTime.StringCompact() + ", ends at " + ai.EndTime.StringCompact()
+						case s:
+							diff = "starts at " + ai.StartTime.StringCompact()
+						case e:
+							diff = "ends at " + ai.EndTime.StringCompact()
+						}
 						hasDiff = true
 					default:
 						diff = "differs"

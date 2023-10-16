@@ -43,6 +43,7 @@ var (
 	Timezone          = flag_TimezoneMap("timezone", make(TimezoneMap), "Default timezone name (used when it can't be detected from facilities), plus optional comma-separated schoolID=timezone override pairs.")
 	NoTimezoneFinder  = flag.Bool("no-timezone-finder", false, "Disable automatic timezone detection")
 	NoGzip            = flag.Bool("no-gzip", false, "Disable automatic gzip response compression")
+	Cors              = flag.Bool("cors", false, "Enable cross-origin requests")
 )
 
 func flag_Level(name string, value slog.Level, usage string) *slog.Level {
@@ -188,8 +189,8 @@ var calendarUserAgentRe = regexp.MustCompile(strings.Join([]string{
 func handle(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimLeft(path.Clean(r.URL.Path), "/")
 
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+		w.Header().Set("Allow", "GET, HEAD, OPTIONS")
 		handleError(w, r, http.StatusMethodNotAllowed, "%s", http.StatusText(http.StatusMethodNotAllowed))
 		return
 	}
@@ -205,6 +206,13 @@ func handle(w http.ResponseWriter, r *http.Request) {
 				if !InstanceWhitelist.Has(int(schoolID)) {
 					handleError(w, r, http.StatusForbidden, "Instance %q not on whitelist", instance)
 					return
+				}
+				if *Cors {
+					// allow cross-origin requests for specific extensions
+					if ext == "ics" || ext == "json" || ext == "fc.json" {
+						w.Header().Set("Access-Control-Allow-Origin", "*")
+						w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+					}
 				}
 				if ext != "ics" && calendarUserAgentRe.MatchString(r.Header.Get("User-Agent")) {
 					w.Header().Set("Cache-Control", "private, no-cache, no-store")

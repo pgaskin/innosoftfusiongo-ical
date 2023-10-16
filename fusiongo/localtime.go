@@ -97,6 +97,18 @@ func (v TimeRange) Compare(x TimeRange) int {
 	return 1
 }
 
+func (v TimeRange) TimeOverlaps(x TimeRange) bool {
+	x1, x2 := v.Start, v.End
+	y1, y2 := x.Start, x.End
+	if x2.Less(x1) {
+		x2.Hour += 24
+	}
+	if y2.Less(y1) {
+		y2.Hour += 24
+	}
+	return !(x2.Less(y1) || y2.Less(x1))
+}
+
 // DateTime combines Date and Time.
 type DateTime struct {
 	Date

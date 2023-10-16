@@ -495,28 +495,9 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 				// note: this is to prevent merging completely different times as exceptions (since it makes it the recurrence somewhat misleading) just because it fits within the exclusions, e.g., if it's from 6:30-9:30 on mondays on most weeks, but repeatedly 19:30-21:30 on days it isn't at 6:30-9:30
 				// note: see testdata/20231015/school20 for a bunch of instances like this
 				for _, ai := range ar.Instances {
-					var overlap bool
-					for _, ai2 := range ar2.Instances {
-						t1 := ai2.StartTime.WithEnd(ai2.EndTime)
-						t2 := ai.StartTime.WithEnd(ai.EndTime)
-
-						// same date for reference
-						t1s, t1e := t1.WithDate(ai2.Date).Range()
-						t2s, t2e := t2.WithDate(ai2.Date).Range()
-
-						// [s1,s2], [e1,e2] overlaps if max(s1,e1) <= min(s2,e2)
-						if t1s.Less(t2s) {
-							t1s = t2s // t1s = max(t1s, t2s)
-						}
-						if t2e.Less(t1e) {
-							t1e = t2e // t1e = min(t1e, t2e)
-						}
-						if !t1e.Less(t1s) {
-							overlap = true
-							break
-						}
-					}
-					if !overlap {
+					if !slices.ContainsFunc(ar2.Instances, func(ai2 activityInstance) bool {
+						return ai.StartTime.WithEnd(ai.EndTime).TimeOverlaps(ai2.StartTime.WithEnd(ai2.EndTime))
+					}) {
 						slog.Debug(fmt.Sprintf("don't merge %s (n=%d) <- %s (n=%d)", ak2, len(ar2.Instances), ak, len(ar.Instances)))
 						continue sch2
 					}

@@ -135,10 +135,9 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 	// " - CANCELED" appended to it... smh...
 	{
 		var (
-			stupidCancelled             []int
-			cancelledActivities         []int
-			syntheticActivities         []fusiongo.ActivityInstance
-			syntheticActivityCategories []fusiongo.ActivityCategory
+			stupidCancelled     []int
+			cancelledActivities []int
+			syntheticActivities []fusiongo.ActivityInstance
 		)
 		for i, fa := range schedule.Activities {
 
@@ -197,7 +196,7 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 				syntheticActivities = append(syntheticActivities, schedule.Activities[m[0]])
 				syntheticActivities[len(syntheticActivities)-1].Time = fa.Time
 				syntheticActivities[len(syntheticActivities)-1].IsCancelled = true
-				syntheticActivityCategories = append(syntheticActivityCategories, schedule.Categories[m[0]])
+				syntheticActivities[len(syntheticActivities)-1].Category = slices.Clone(syntheticActivities[len(syntheticActivities)-1].Category)
 				continue
 			}
 		}
@@ -215,12 +214,10 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 			for i := len(stupidCancelled) - 1; i >= 0; i-- {
 				x := stupidCancelled[i]
 				schedule.Activities = slices.Delete(schedule.Activities, x, x+1)
-				schedule.Categories = slices.Delete(schedule.Categories, x, x+1)
 			}
 
 			// add the new synthetic instances
 			schedule.Activities = append(schedule.Activities, syntheticActivities...)
-			schedule.Categories = append(schedule.Categories, syntheticActivityCategories...)
 		}
 	}
 
@@ -229,14 +226,14 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 	// - we also depend on each activity having at least one category (this should always be true)
 	{
 		faSeen := map[string]fusiongo.ActivityInstance{}
-		for i, fa := range schedule.Activities {
+		for _, fa := range schedule.Activities {
 			iid := fmt.Sprint(fa.ActivityID, fa.Location, fa.Time.Date, fa.Time.TimeRange.Start)
 			if x, seen := faSeen[iid]; !seen {
 				faSeen[iid] = fa
 			} else if !reflect.DeepEqual(fa, x) {
 				slog.Warn("activity instance is not uniquely identified by (id, location, date, start)", "activity1", fa, "activity2", x)
 			}
-			if len(schedule.Categories[i].Category) == 0 {
+			if len(fa.Category) == 0 {
 				panic("wtf: expected activity instance to have at least one category")
 			}
 		}
@@ -262,8 +259,8 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 				Date:        fai.Time.Date,
 				StartTime:   fai.Time.TimeRange.Start,
 				EndTime:     fai.Time.TimeRange.End,
-				Categories:  schedule.Categories[i].Category,
-				CategoryIDs: schedule.Categories[i].CategoryID,
+				Categories:  fai.CategoryNames(),
+				CategoryIDs: fai.CategoryIDs(),
 			}
 			return ak, ai
 		}),
@@ -345,11 +342,11 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 				EndTime: mostCommonBy(ais, func(ai activityInstance) fusiongo.Time {
 					return ai.EndTime
 				}),
-				Categories: strings.Split(mostCommonBy(ais, func(v activityInstance) string {
-					return strings.Join(v.Categories, "\x00") // HACK
+				Categories: strings.Split(mostCommonBy(ais, func(ai activityInstance) string {
+					return strings.Join(ai.Categories, "\x00") // HACK
 				}), "\x00"),
-				CategoryIDs: strings.Split(mostCommonBy(ais, func(v activityInstance) string {
-					return strings.Join(v.CategoryIDs, "\x00") // HACK
+				CategoryIDs: strings.Split(mostCommonBy(ais, func(ai activityInstance) string {
+					return strings.Join(ai.CategoryIDs, "\x00") // HACK
 				}), "\x00"),
 
 				// use the earliest date
@@ -1172,19 +1169,10 @@ func (c *Calendar) describeRecurrence(ak activityKey, schFilter map[activityKey]
 func cloneSchedule(s *fusiongo.Schedule) *fusiongo.Schedule {
 	ns := &fusiongo.Schedule{
 		Updated:    s.Updated,
-		Activities: make([]fusiongo.ActivityInstance, len(s.Activities)),
-		Categories: make([]fusiongo.ActivityCategory, len(s.Activities)),
+		Activities: slices.Clone(s.Activities),
 	}
 	for i := range s.Activities {
-		ns.Activities[i] = s.Activities[i]
-		ns.Categories[i] = fusiongo.ActivityCategory{
-			Category:   make([]string, len(s.Categories[i].Category)),
-			CategoryID: make([]string, len(s.Categories[i].CategoryID)),
-		}
-		for j := range s.Categories[i].Category {
-			ns.Categories[i].Category[j] = s.Categories[i].Category[j]
-			ns.Categories[i].CategoryID[j] = s.Categories[i].CategoryID[j]
-		}
+		ns.Activities[i].Category = slices.Clone(ns.Activities[i].Category)
 	}
 	return ns
 }

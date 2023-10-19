@@ -12,7 +12,6 @@ import (
 type Schedule struct {
 	Updated    time.Time
 	Activities []ActivityInstance
-	Categories []ActivityCategory
 }
 
 type ActivityInstance struct {
@@ -22,11 +21,28 @@ type ActivityInstance struct {
 	Location    string
 	Description string
 	IsCancelled bool
+	Category    []ActivityCategory
 }
 
 type ActivityCategory struct {
-	Category   []string
-	CategoryID []string
+	ID   string
+	Name string
+}
+
+func (ai ActivityInstance) CategoryNames() []string {
+	n := make([]string, len(ai.Category))
+	for i := range n {
+		n[i] = ai.Category[i].Name
+	}
+	return n
+}
+
+func (ai ActivityInstance) CategoryIDs() []string {
+	n := make([]string, len(ai.Category))
+	for i := range n {
+		n[i] = ai.Category[i].ID
+	}
+	return n
 }
 
 // FetchSchedule fetches the latest notifications for the provided instance
@@ -42,10 +58,28 @@ func ParseSchedule(fusionJSON []byte) (*Schedule, error) {
 	if !gjson.ValidBytes(fusionJSON) {
 		return nil, fmt.Errorf("invalid JSON")
 	}
+	type aiKey struct {
+		Time        DateTimeRange
+		Activity    string
+		ActivityID  string
+		Location    string
+		Description string
+		IsCancelled bool
+	}
+	toKey := func(a ActivityInstance) aiKey {
+		return aiKey{
+			Time:        a.Time,
+			Activity:    a.Activity,
+			ActivityID:  a.ActivityID,
+			Location:    a.Location,
+			Description: a.Description,
+			IsCancelled: a.IsCancelled,
+		}
+	}
 	var (
 		err           error
 		schedule      Schedule
-		scheduleIndex = map[ActivityInstance]int{} // to quickly check for duplicates
+		scheduleIndex = map[aiKey]int{} // to quickly check for duplicates
 	)
 	gjson.ParseBytes(fusionJSON).ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {
@@ -144,18 +178,20 @@ func ParseSchedule(fusionJSON []byte) (*Schedule, error) {
 						return false
 					}
 					for _, activity := range categoryActivities {
-						if i, exists := scheduleIndex[activity]; exists {
+						if i, exists := scheduleIndex[toKey(activity)]; exists {
 							if i < categoryStart {
-								schedule.Categories[i].Category = append(schedule.Categories[i].Category, categoryName)
-								schedule.Categories[i].CategoryID = append(schedule.Categories[i].CategoryID, categoryID)
+								schedule.Activities[i].Category = append(schedule.Activities[i].Category, ActivityCategory{
+									ID:   categoryID,
+									Name: categoryName,
+								})
 							}
 						} else {
-							scheduleIndex[activity] = len(schedule.Activities)
-							schedule.Activities = append(schedule.Activities, activity)
-							schedule.Categories = append(schedule.Categories, ActivityCategory{
-								Category:   []string{categoryName},
-								CategoryID: []string{categoryID},
+							scheduleIndex[toKey(activity)] = len(schedule.Activities)
+							activity.Category = append(activity.Category, ActivityCategory{
+								ID:   categoryID,
+								Name: categoryName,
 							})
+							schedule.Activities = append(schedule.Activities, activity)
 						}
 					}
 					return true

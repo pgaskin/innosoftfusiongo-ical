@@ -4,6 +4,7 @@ import (
 	"embed"
 	"io/fs"
 	"sync"
+	"testing"
 
 	"github.com/pgaskin/innosoftfusiongo-ical/fusiongo"
 )
@@ -47,4 +48,23 @@ func Use(d string) func() {
 		}
 	}
 	panic("testdata: nothing for " + d)
+}
+
+// Run runs tests using all stored testdata using [Use] internally. It must not
+// be run in parallel.
+func Run(t *testing.T, fn func(t *testing.T, d string)) {
+	fis, err := fs.ReadDir(testdata, ".")
+	if err != nil {
+		panic(err)
+	}
+
+	for _, fi := range fis {
+		if fi.IsDir() {
+			t.Run(fi.Name(), func(t *testing.T) {
+				defer Use(fi.Name())()
+
+				fn(t, fi.Name())
+			})
+		}
+	}
 }

@@ -95,7 +95,11 @@ func parseNotification(value gjson.Result) (notification Notification, err error
 	value.ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {
 		case "id":
+			// used to be a string, is now an int
 			notification.ID = value.Str
+			if notification.ID == "" {
+				notification.ID = value.Raw
+			}
 		case "notification":
 			notification.Text = value.Str
 		case "datetime_sent":

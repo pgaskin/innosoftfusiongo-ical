@@ -1,0 +1,15 @@
+{
+    "lastUpdateUtcDateTime": "2024-01-08T17:58:41Z",
+    "notifications": [
+        {
+            "id": 20211,
+            "notification": "MONDAY JANUARY 8 - the pool will be closed today.  All member lane swims & bookings are cancelled.  We apologize for the inconvenience.",
+            "datetime_sent": "2024-01-08 09:06:00"
+        },
+        {
+            "id": 20205,
+            "notification": "POOL NOTICE: Please be aware that the 7:30 a.m. member lane swim and the 9:00 am women's only lane swim on Monday, January 8 are cancelled.",
+            "datetime_sent": "2024-01-07 19:04:00"
+        }
+    ]
+}

@@ -144,7 +144,19 @@ func (c *Calendar) initSchedule(schedule *fusiongo.Schedule) error {
 			// check if it's a fake-cancelled event
 			name, cancelled := strings.CutSuffix(fa.Activity, " - CANCELLED")
 			if !cancelled {
+				name, cancelled = strings.CutSuffix(fa.Activity, " - CANCELLED ")
+			}
+			if !cancelled {
 				name, cancelled = strings.CutSuffix(fa.Activity, " - CANCELED")
+			}
+			if !cancelled {
+				name, cancelled = strings.CutSuffix(fa.Activity, " - CANCELED ")
+			}
+			if !cancelled {
+				name, cancelled = strings.CutSuffix(fa.Activity, "CANCELED - ")
+			}
+			if !cancelled {
+				name, cancelled = strings.CutSuffix(fa.Activity, "CANCELLED - ")
 			}
 			if !cancelled {
 				continue

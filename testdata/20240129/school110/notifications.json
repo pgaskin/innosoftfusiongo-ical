@@ -1,0 +1,15 @@
+{
+    "lastUpdateUtcDateTime": "2024-01-29T18:45:33Z",
+    "notifications": [
+        {
+            "id": 20641,
+            "notification": "POOL NOTICE: Please be aware that the 2:30 pm lane swim today (Jan 29) has also been canceled for pool maintenance.",
+            "datetime_sent": "2024-01-29 13:39:00"
+        },
+        {
+            "id": 20630,
+            "notification": "POOL NOTICE: Please be aware that the 11:30 am lane swim today (Jan 29) has been canceled for pool maintenance. ",
+            "datetime_sent": "2024-01-29 10:34:00"
+        }
+    ]
+}

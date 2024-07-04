@@ -106,7 +106,7 @@ func ParseSchedule(fusionJSON []byte) (*Schedule, error) {
 						case "category":
 							categoryName = value.Str
 						case "id":
-							categoryID = value.Str
+							categoryID = value.String() // can be an int since after the move to FWS
 						case "days":
 							if value.IsArray() {
 								value.ForEach(func(_, value gjson.Result) bool {

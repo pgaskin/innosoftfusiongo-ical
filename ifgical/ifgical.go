@@ -748,7 +748,7 @@ func (c *Calendar) RenderICS(o Options) []byte {
 	b = icalAppendPropRaw(b, "X-PUBLISHED-TTL", "PT60M")
 
 	// last modified
-	if c.notT.After(c.schT) {
+	if !c.notT.IsZero() && c.notT.After(c.schT) {
 		b = icalAppendPropDateTimeUTC(b, "LAST-MODIFIED", fusiongo.GoDateTime(c.notT.UTC()))
 	} else {
 		b = icalAppendPropDateTimeUTC(b, "LAST-MODIFIED", fusiongo.GoDateTime(c.schT.UTC()))
@@ -875,7 +875,11 @@ func (c *Calendar) RenderICS(o Options) []byte {
 			uid := fmt.Sprintf("notification-%s@school%d.innosoftfusiongo.com", ni.ID, c.id)
 			b = icalAppendPropRaw(b, "BEGIN", "VEVENT")
 			b = icalAppendPropRaw(b, "UID", uid)
-			b = icalAppendPropDateTimeUTC(b, "DTSTAMP", fusiongo.GoDateTime(c.notT.UTC()))
+			if !c.notT.IsZero() {
+				b = icalAppendPropDateTimeUTC(b, "DTSTAMP", fusiongo.GoDateTime(c.notT.UTC()))
+			} else {
+				b = icalAppendPropDateTimeUTC(b, "DTSTAMP", fusiongo.GoDateTime(time.Now().UTC().Truncate(time.Second)))
+			}
 			b = icalAppendPropText(b, "SUMMARY", ni.Text)
 			b = icalAppendPropText(b, "DESCRIPTION", ni.Text)
 			b = icalAppendPropDate(b, "DTSTART;VALUE=DATE", ni.Sent.Date)

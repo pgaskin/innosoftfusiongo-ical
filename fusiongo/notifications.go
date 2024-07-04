@@ -72,7 +72,7 @@ func ParseNotifications(fusionJSON []byte) (*Notifications, error) {
 	if err == nil {
 		switch {
 		case notifications.Updated.IsZero():
-			err = fmt.Errorf("missing schedule update time")
+			// no longer in FWS-generated notifications (after May 2024)
 		default:
 			for _, notification := range notifications.Notifications {
 				if _, seen := notificationIDs[notification.ID]; seen {

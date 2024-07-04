@@ -73,7 +73,13 @@ func (c fusionCMS) FetchJSON(ctx context.Context, schoolID int, dataType string)
 	if err != nil {
 		return nil, err
 	}
-	req.URL.Path = path.Join("/", req.URL.Path, "schools", "school"+strconv.Itoa(schoolID), url.PathEscape(dataType)+".json")
+	req.URL.Path = path.Join("/", req.URL.Path, "schools", "download.php")
+	req.URL.RawQuery = url.Values{
+		"schoolid": []string{strconv.Itoa(schoolID)},
+		"version":  []string{"5.15.0"},
+		"device":   []string{"Android"},
+		"file":     []string{dataType},
+	}.Encode()
 
 	if c.hdr != nil {
 		for k, v := range c.hdr {

@@ -1,0 +1,14 @@
+{
+    "notifications": [
+        {
+            "id": 100145,
+            "notification": "Service Update: the Queen's ARC passenger elevator is back online as of Thurs June 27. Thank you for the extended patience during repairs. ",
+            "datetime_sent": "2024-06-27 15:58:00"
+        },
+        {
+            "id": 100138,
+            "notification": "Upcoming Lane Swim Cancellation: June 30th, 11:30 AM - 1:00 PM",
+            "datetime_sent": "2024-06-27 13:52:00"
+        }
+    ]
+}
